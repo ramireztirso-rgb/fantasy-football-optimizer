@@ -87,6 +87,8 @@ const BASELINE_VOLUME: Record<number, { position: Position; perGame: number }> =
   53: { position: "WR", perGame: 4.5 },  // receptions
   58: { position: "WR", perGame: 6.5 },  // targets
   72: { position: "RB", perGame: 0.15 }, // fumbles lost
+  212: { position: "RB", perGame: 3.5 },  // rushing first downs
+  213: { position: "WR", perGame: 3.5 },  // receiving first downs
 };
 
 export function buildScoringProfile(

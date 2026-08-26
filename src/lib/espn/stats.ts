@@ -42,6 +42,13 @@ export const STAT_META: Record<number, StatMeta> = {
   53: { label: "Receptions", category: "receiving", standard: 0 },
   58: { label: "Targets", category: "receiving", standard: 0 },
 
+  // First downs. ESPN numbers these in its usual passing -> rushing ->
+  // receiving order, and the platform pays nothing for any of them by default,
+  // so a league that scores them is always doing so deliberately.
+  211: { label: "Passing first downs", category: "passing", standard: 0 },
+  212: { label: "Rushing first downs", category: "rushing", standard: 0 },
+  213: { label: "Receiving first downs", category: "receiving", standard: 0 },
+
   68: { label: "Fumbles", category: "turnover", standard: 0 },
   72: { label: "Fumbles lost", category: "turnover", standard: -2 },
 
