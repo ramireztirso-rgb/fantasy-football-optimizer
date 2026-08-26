@@ -135,6 +135,12 @@ const STREAMABLE = new Set<Position>(["K", "DST"]);
 const ROSTER_LOCK_FLOOR = -1000;
 
 /**
+ * Score a second kicker or defence is driven beneath. Below every real player,
+ * including the unstartable ones, and still above a roster-illegal pick.
+ */
+const BACKUP_STREAM_FLOOR = -500;
+
+/**
  * Total rounds in the draft.
  *
  * Starters plus bench, and deliberately *not* IR: an injured-reserve slot is
@@ -269,6 +275,15 @@ function score(proj: Projection, ctx: ScoreContext): DraftRecommendation {
    * is the larger that bonus grows -- which had the board ranking a sixth-string
    * tight end above startable players precisely because he was terrible. Sign is
    * decided by each factor explicitly; this only ever supplies size.
+   */
+  /**
+   * Magnitude to scale proportional adjustments by.
+   *
+   * Every factor below is a percentage *of the player's value*, and a player
+   * below replacement has negative value. Multiplying a penalty by a negative
+   * number turns it into a bonus, and the further below replacement the player
+   * is the larger that bonus grows. Sign is decided by each factor explicitly;
+   * this only ever supplies size.
    */
   const scale = Math.abs(vorpValue);
 
@@ -448,17 +463,37 @@ function score(proj: Projection, ctx: ScoreContext): DraftRecommendation {
 
   // Applied last so it scales against everything else the player earned.
   if (STREAMABLE.has(pos)) {
-    // Full value only in the last two rounds; near zero before that.
-    const roundsLeft = ctx.rounds - ctx.currentRound;
-    const readiness = roundsLeft <= 1 ? 1 : roundsLeft <= 2 ? 0.6 : 0.03;
     const running = b.total();
-    if (readiness < 1 && running > 0) {
+
+    if (!ctx.feasibility.mustFill.has(pos) && running > 0) {
+      // A second kicker is not depth, it is nothing. Every other position keeps
+      // some value as injury cover; these two are refilled off waivers in the
+      // minute it takes to notice, so once the slot is covered the next one is
+      // worth as close to zero as the board can say. Timing does not enter into
+      // it -- this holds in the final round as much as the first.
+      // Driven below zero rather than merely shrunk. Trimming a positive value
+      // by any percentage leaves a positive value, and late in a draft every
+      // real player left is below replacement and therefore negative -- so a
+      // heavily discounted backup kicker still wins. This is a "never", so it
+      // is expressed the same way the roster lock is.
       b.add(
-        "stream_position",
-        "Draft this last",
-        `${pos} is streamed off the wire every week, so drafting one in round ${ctx.currentRound} of ${ctx.rounds} costs you a real player for a spot you can fill for free later. Take one in the final two rounds.`,
-        -running * (1 - readiness),
+        "stream_backup",
+        `You already have a ${pos}`,
+        `${pos} is the one position with no depth value at all: if yours has a bad matchup or a bye you take a different one off the wire that week, for free. A second ${pos} spends a pick on something waivers give away.`,
+        BACKUP_STREAM_FLOOR + running * 0.001 - running,
       );
+    } else {
+      // Full value only in the last two rounds; near zero before that.
+      const roundsLeft = ctx.rounds - ctx.currentRound;
+      const readiness = roundsLeft <= 1 ? 1 : roundsLeft <= 2 ? 0.6 : 0.03;
+      if (readiness < 1 && running > 0) {
+        b.add(
+          "stream_position",
+          "Draft this last",
+          `${pos} is streamed off the wire every week, so drafting one in round ${ctx.currentRound} of ${ctx.rounds} costs you a real player for a spot you can fill for free later. Take one in the final two rounds.`,
+          -running * (1 - readiness),
+        );
+      }
     }
   }
 
