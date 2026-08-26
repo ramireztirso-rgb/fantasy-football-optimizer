@@ -75,8 +75,43 @@ export interface DraftRecommendation {
   reasons: Reason[];
 }
 
+/**
+ * A group of players who are worth about the same, whatever position they play.
+ *
+ * The board's existing tiers are per-position, which answers "is there a cliff
+ * after this tight end" and cannot answer the question a manager on the clock
+ * actually asks: of everyone in front of me, who is genuinely equivalent, and
+ * given that, who fits my roster best?
+ *
+ * Bands are cut on raw value over replacement -- deliberately not on the final
+ * score, which already contains the roster adjustments. Banding on the score
+ * would group players by how well they fit and then rank them by how well they
+ * fit, which is circular and would hide the very thing worth showing: that
+ * three players are equal in value and one of them is better for *you*.
+ */
+export interface ValueBand {
+  /** 1 is the most valuable band on the board. */
+  band: number;
+  /** Members, best fit for this roster first. */
+  players: DraftRecommendation[];
+  valueHigh: number;
+  valueLow: number;
+  /** Raw value given up by waiting for the next band down. */
+  dropoff: number;
+  /**
+   * Set when fit reorders the band -- when the most valuable player in it is
+   * not the one to take. This is the whole point of the grouping.
+   */
+  fitNote: string | null;
+}
+
 export interface DraftBoard {
   recommendations: DraftRecommendation[];
+  /**
+   * Recommendations grouped into bands of equivalent value, best fit first
+   * within each. Empty when the board is too short to cluster meaningfully.
+   */
+  tiers: ValueBand[];
   /** Positional runs and cliffs worth knowing about right now. */
   boardNotes: Reason[];
   replacementLevels: ReplacementLevels;
@@ -193,6 +228,7 @@ export function buildDraftBoard(
 
   return {
     recommendations,
+    tiers: bandByValue(recommendations),
     boardNotes: buildBoardNotes(projections, tierByPlayer, state, picksUntilNextTurn),
     replacementLevels,
   };
@@ -476,6 +512,83 @@ export function survivalProbability(
   const sd = measuredSd !== undefined ? Math.max(1.5, measuredSd) : Math.max(4, adp * 0.28);
   // P(drafted after targetPick) = 1 - CDF(targetPick)
   return clamp01(1 - normalCdf((targetPick - adp) / sd));
+}
+
+/**
+ * Cuts the board into bands of equivalent value.
+ *
+ * A break is declared where the drop in value from one player to the next is
+ * unusually large for this board -- the same cliff-finding idea the positional
+ * tiers use, applied across positions. `sensitivity` is in standard deviations
+ * of the typical gap.
+ */
+export function bandByValue(
+  recommendations: DraftRecommendation[],
+  maxBands = 6,
+): ValueBand[] {
+  if (recommendations.length < 3) return [];
+
+  const byValue = [...recommendations].sort((a, b) => b.vorp - a.vorp);
+  const groups: DraftRecommendation[][] = [];
+
+  for (const rec of byValue) {
+    const current = groups[groups.length - 1];
+    const leader = current?.[0];
+    // Membership is judged against the band's leader rather than the previous
+    // player. Chaining neighbour-to-neighbour lets a long shallow slope walk a
+    // band from elite to replacement level one small step at a time, which is
+    // how a "tier" ends up spanning sixty points and meaning nothing.
+    if (leader && rec.vorp >= leader.vorp - bandTolerance(leader.vorp) && groups.length <= maxBands) {
+      current.push(rec);
+    } else {
+      groups.push([rec]);
+    }
+  }
+
+  return groups.slice(0, maxBands).map((members, i, all) => {
+    const values = members.map((m) => m.vorp);
+    const valueHigh = Math.max(...values);
+    const valueLow = Math.min(...values);
+    const nextBandTop = all[i + 1]?.[0]?.vorp;
+
+    // Within a band, value is settled; what is left is fit, which is exactly
+    // what the score already weighs.
+    const mostValuable = members[0];
+    const byFit = [...members].sort((a, b) => b.score - a.score);
+    const bestFit = byFit[0];
+
+    let fitNote: string | null = null;
+    if (members.length > 1 && bestFit.player.id !== mostValuable.player.id) {
+      const reason = bestFit.reasons.find(
+        (r) => r.direction === "positive" && r.code !== "vorp" && r.code !== "survival",
+      );
+      fitNote =
+        `${bestFit.player.name} and ${mostValuable.player.name} are worth about the same here ` +
+        `(${valueLow.toFixed(0)}-${valueHigh.toFixed(0)} over replacement), but ${bestFit.player.name} ` +
+        `fits this roster better` +
+        (reason ? `: ${reason.label.toLowerCase()}.` : `.`);
+    }
+
+    return {
+      band: i + 1,
+      players: byFit,
+      valueHigh: round2(valueHigh),
+      valueLow: round2(valueLow),
+      dropoff: nextBandTop === undefined ? 0 : round2(valueLow - nextBandTop),
+      fitNote,
+    };
+  });
+}
+
+/**
+ * How far below a band's leader still counts as the same band.
+ *
+ * Proportional, with a floor: eight percent of an elite player's value is a
+ * meaningful gap, while eight percent of a marginal one is rounding error, and
+ * late in a draft almost everyone would otherwise collapse into a single band.
+ */
+function bandTolerance(leaderValue: number): number {
+  return Math.max(6, Math.abs(leaderValue) * 0.08);
 }
 
 function buildBoardNotes(

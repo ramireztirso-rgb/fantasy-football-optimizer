@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildDemoLeague } from "@/lib/demo/league";
 import { projectPlayer } from "@/lib/engine/projections";
 import { computeReplacementLevels, starterDemand, assignTiers } from "@/lib/engine/replacement";
-import { buildDraftBoard, normalCdf, rosterNeed, survivalProbability } from "@/lib/engine/draft";
+import { bandByValue, buildDraftBoard, normalCdf, rosterNeed, survivalProbability } from "@/lib/engine/draft";
 import { buildWaiverReport } from "@/lib/engine/waivers";
 import { diffSnapshots, lineupProblems } from "@/lib/live/events";
 import type { Player } from "@/lib/domain/types";
@@ -314,5 +314,64 @@ describe("survival with a measured spread", () => {
 
   it("still returns certainty when the target pick is now", () => {
     expect(survivalProbability(player, 90, 90, 3)).toBe(1);
+  });
+});
+
+describe("value bands", () => {
+  const rec = (id: number, name: string, vorp: number, score: number) =>
+    ({
+      player: { id, name, position: "RB" },
+      vorp,
+      score,
+      reasons: [{ code: "roster_need", label: "Fills a need", detail: "", impact: 5, direction: "positive" }],
+    }) as unknown as Parameters<typeof bandByValue>[0][number];
+
+  it("groups players of comparable value and splits at real gaps", () => {
+    const bands = bandByValue([
+      rec(1, "Elite", 140, 140),
+      rec(2, "Good A", 100, 100),
+      rec(3, "Good B", 96, 99),
+      rec(4, "Fringe", 40, 40),
+    ]);
+    expect(bands.map((b) => b.players.length)).toEqual([1, 2, 1]);
+    expect(bands[0].players[0].player.name).toBe("Elite");
+  });
+
+  // The failure this guards: judging membership against the previous player
+  // instead of the band leader lets a long shallow slope walk one band from
+  // elite to replacement level in small steps, so a "tier" spans everything
+  // and means nothing.
+  it("does not let a shallow slope chain into one enormous band", () => {
+    const sliding = Array.from({ length: 30 }, (_, i) => rec(i + 1, `P${i}`, 150 - i * 3, 150 - i * 3));
+    const bands = bandByValue(sliding);
+    expect(bands.length).toBeGreaterThan(1);
+    for (const band of bands) {
+      expect(band.valueHigh - band.valueLow).toBeLessThanOrEqual(band.valueHigh * 0.08 + 6.001);
+    }
+  });
+
+  // The point of banding: inside a band, value is settled and fit decides.
+  it("orders a band by fit and says so when that reorders it", () => {
+    const bands = bandByValue([
+      rec(1, "More Valuable", 100, 90),
+      rec(2, "Better Fit", 97, 110),
+      rec(3, "Filler", 40, 40),
+    ]);
+    expect(bands[0].players[0].player.name).toBe("Better Fit");
+    expect(bands[0].fitNote).toContain("Better Fit");
+    expect(bands[0].fitNote).toContain("fits this roster better");
+  });
+
+  it("stays quiet when the most valuable player is also the best fit", () => {
+    const bands = bandByValue([
+      rec(1, "Best", 100, 120),
+      rec(2, "Second", 97, 100),
+      rec(3, "Filler", 40, 40),
+    ]);
+    expect(bands[0].fitNote).toBeNull();
+  });
+
+  it("declines to band a board too short to cluster", () => {
+    expect(bandByValue([])).toEqual([]);
   });
 });
