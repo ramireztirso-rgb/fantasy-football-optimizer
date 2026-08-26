@@ -260,6 +260,18 @@ function score(proj: Projection, ctx: ScoreContext): DraftRecommendation {
   const replacement = ctx.replacementLevels[pos] ?? 0;
   const vorpValue = round2(proj.points - replacement);
 
+  /**
+   * Magnitude to scale proportional adjustments by.
+   *
+   * Every factor below is a percentage *of the player's value*, and a player
+   * below replacement has negative value. Multiplying a penalty by a negative
+   * number turns it into a bonus, and the further below replacement the player
+   * is the larger that bonus grows -- which had the board ranking a sixth-string
+   * tight end above startable players precisely because he was terrible. Sign is
+   * decided by each factor explicitly; this only ever supplies size.
+   */
+  const scale = Math.abs(vorpValue);
+
   b.setBase(
     vorpValue,
     "vorp",
@@ -270,7 +282,7 @@ function score(proj: Projection, ctx: ScoreContext): DraftRecommendation {
   // --- Roster need ---
   const needFactor = ctx.need[pos] ?? 0;
   if (needFactor > 0) {
-    const bonus = vorpValue * 0.15 * needFactor;
+    const bonus = scale * 0.15 * needFactor;
     b.add(
       "roster_need",
       "Fills a need",
@@ -293,7 +305,12 @@ function score(proj: Projection, ctx: ScoreContext): DraftRecommendation {
     // fifth of one. Penalising them equally is what leaves the board rostering
     // three quarterbacks it can never start two of.
     const demand = Math.max(0.5, ctx.perTeamDemand[pos] ?? 1);
-    const surplus = Math.max(0, ctx.owned[pos] - demand);
+    // The player being scored is the marginal one, so he counts himself.
+    // Measuring only what the roster already holds means a second kicker in a
+    // one-kicker league registers as zero surplus and escapes with the
+    // starting-rate haircut, which is how a board talks itself into a backup
+    // kicker over a startable receiver.
+    const surplus = Math.max(0, ctx.owned[pos] + 1 - demand);
     // Each surplus starter's worth of depth halves what the next one is worth.
     // A first backup is insurance and holds real value; a fourth is a roster
     // spot you set on fire. A fixed rate, however steep, cannot express that,
@@ -307,7 +324,7 @@ function score(proj: Projection, ctx: ScoreContext): DraftRecommendation {
       surplus >= demand
         ? `You already carry ${ctx.owned[pos]} ${pos}${ctx.owned[pos] === 1 ? "" : "s"} against ${(ctx.perTeamDemand[pos] ?? 0).toFixed(1)} starting spots. Another one cannot crack your lineup, so his value here is a fraction of his projection.`
         : `Your ${pos} starting slots are already covered, so this player's value only shows up as depth or a trade chip.`,
-      -vorpValue * rate,
+      -scale * rate,
     );
   }
 
@@ -356,7 +373,7 @@ function score(proj: Projection, ctx: ScoreContext): DraftRecommendation {
   if (ctx.picksUntilNextTurn > 0) {
     if (survival > 0.6) {
       // Very likely to last: taking them now spends a pick you did not need to.
-      const discount = vorpValue * 0.2 * (survival - 0.6) / 0.4;
+      const discount = scale * 0.2 * (survival - 0.6) / 0.4;
       b.add(
         "likely_to_last",
         "Can wait",
@@ -364,7 +381,7 @@ function score(proj: Projection, ctx: ScoreContext): DraftRecommendation {
         -discount,
       );
     } else if (survival < 0.25) {
-      const urgency = Math.min(vorpValue * 0.25, tier.dropoff * 0.5 + 3) * (1 - survival / 0.25);
+      const urgency = Math.min(scale * 0.25, tier.dropoff * 0.5 + 3) * (1 - survival / 0.25);
       b.add(
         "last_chance",
         "Now or never",
