@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bestLineupPoints, marginalValue } from "@/lib/engine/marginalValue";
+import { bestLineupPoints, levelsAvailableLater, marginalValue } from "@/lib/engine/marginalValue";
 import type { LeagueSettings, Player } from "@/lib/domain/types";
 
 const settings = {
@@ -87,5 +87,43 @@ describe("marginalValue", () => {
     const backup = marginalValue(player(3, "TE"), 200, ctx(stacked));
     expect(backup).toBeGreaterThan(0);
     expect(backup).toBeLessThan(10);
+  });
+});
+
+describe("levelsAvailableLater", () => {
+  const available = [
+    { player: player(1, "DST"), points: 136 },
+    { player: player(2, "DST"), points: 130 },
+    { player: player(3, "RB"), points: 300 },
+    { player: player(4, "RB"), points: 200 },
+  ];
+
+  // The whole reason a board should not draft a defence in the fourth round:
+  // the good ones are still there later, so waiting costs almost nothing.
+  it("reports what you can safely wait for, not the best thing available", () => {
+    const survives = (p: Player) => (p.position === "DST" ? 0.9 : 0.1);
+    const later = levelsAvailableLater(available, levels, survives);
+    expect(later.DST).toBe(136);
+    // No back is likely to last, so waiting gets you a free agent.
+    expect(later.RB).toBe(levels.RB);
+  });
+
+  it("ignores players more likely than not to be gone", () => {
+    const survives = () => 0.2;
+    const later = levelsAvailableLater(available, levels, survives);
+    expect(later.DST).toBe(levels.DST);
+    expect(later.RB).toBe(levels.RB);
+  });
+
+  // Taking a player you could have waited for is worth nearly nothing, which
+  // is the behaviour the whole term exists to produce.
+  it("collapses the value of a player you could have had later", () => {
+    const survives = (p: Player) => (p.position === "DST" ? 0.9 : 0.1);
+    const later = levelsAvailableLater(available, levels, survives);
+    const ctx = { settings, levels: later, roster: [], picksRemaining: 10 };
+    const defence = marginalValue(player(1, "DST"), 136, ctx);
+    const back = marginalValue(player(3, "RB"), 300, ctx);
+    expect(defence).toBeLessThan(1);
+    expect(back).toBeGreaterThan(50);
   });
 });

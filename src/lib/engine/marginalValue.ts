@@ -25,7 +25,51 @@ import type { ReplacementLevels } from "./replacement";
  * every number is points added to one particular lineup. And the value can
  * never come out negative, since adding a player cannot make your best lineup
  * worse -- which is where the older measure kept going wrong.
+ *
+ * The fourth problem does not solve itself, and getting it wrong is what makes
+ * a board draft a defence in the fourth round. An empty slot must not be valued
+ * at what a freely available player gives you, because that is not the choice
+ * anyone is making. Nobody filling a defence slot in round four is deciding
+ * between a good defence and a bad one -- they are deciding between a good
+ * defence now and an almost-as-good defence in round fifteen, which costs
+ * nothing, because those are still there in round fifteen. So an unfilled slot
+ * is valued at the best player you can still expect to get for it later. For
+ * defences that is nearly the same player, so taking one early adds almost
+ * nothing and it drops down the board. For a back in the middle of a run the
+ * later option is far worse, so he rises. That difference is opportunity cost,
+ * and here it is not an adjustment bolted on afterwards -- it is the
+ * definition of what a player is worth.
  */
+
+/**
+ * The best player at each position you can still expect to be there at your
+ * next turn.
+ *
+ * "Expect" is doing real work: a player is only counted if he is more likely
+ * than not to last, so the number answers "what can I safely wait for" rather
+ * than "what is the best thing that could conceivably fall to me". Where
+ * nothing at a position is likely to last, the honest answer is a freely
+ * available player, which is the replacement level.
+ */
+export function levelsAvailableLater(
+  available: Array<{ player: Player; points: number }>,
+  replacement: ReplacementLevels,
+  survives: (player: Player) => number,
+  threshold = 0.5,
+): ReplacementLevels {
+  const levels = { ...replacement };
+  for (const pos of Object.keys(replacement) as Position[]) {
+    let best = replacement[pos] ?? 0;
+    for (const entry of available) {
+      if (entry.player.position !== pos) continue;
+      if (entry.points <= best) continue;
+      if (survives(entry.player) < threshold) continue;
+      best = entry.points;
+    }
+    levels[pos] = best;
+  }
+  return levels;
+}
 
 /** Points a freely available player would give you in a slot. */
 function replacementForSlot(slot: string, levels: ReplacementLevels): number {
