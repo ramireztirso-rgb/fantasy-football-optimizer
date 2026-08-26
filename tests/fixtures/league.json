@@ -1,0 +1,106 @@
+{
+  "id": 123456,
+  "seasonId": 2026,
+  "scoringPeriodId": 6,
+  "status": { "currentMatchupPeriod": 6, "latestScoringPeriod": 6, "isActive": true },
+  "settings": {
+    "name": "Fixture League",
+    "size": 2,
+    "rosterSettings": { "lineupSlotCounts": { "0": 1, "2": 2, "4": 2, "6": 1, "16": 1, "17": 1, "20": 6, "21": 1, "23": 1 } },
+    "scoringSettings": { "scoringItems": [{ "statId": 53, "points": 1 }, { "statId": 42, "points": 6 }] },
+    "acquisitionSettings": { "acquisitionBudget": 100, "isUsingAcquisitionBudget": true },
+    "scheduleSettings": { "matchupPeriodCount": 14, "playoffTeamCount": 6 }
+  },
+  "teams": [
+    {
+      "id": 1,
+      "name": "Fixture One",
+      "abbrev": "FX1",
+      "owners": ["{ABC-123}"],
+      "record": { "overall": { "wins": 3, "losses": 2, "ties": 0, "pointsFor": 540.5, "pointsAgainst": 501.2 } },
+      "transactionCounter": { "acquisitionBudgetSpent": 35 },
+      "roster": {
+        "entries": [
+          {
+            "playerId": 3139477,
+            "lineupSlotId": 0,
+            "playerPoolEntry": {
+              "player": {
+                "id": 3139477,
+                "fullName": "Fixture Quarterback",
+                "defaultPositionId": 1,
+                "eligibleSlots": [0, 7, 20, 21],
+                "proTeamId": 12,
+                "injuryStatus": "ACTIVE",
+                "ownership": { "percentOwned": 99.4, "percentChange": 0.1, "percentStarted": 97.2, "averageDraftPosition": 18.4 },
+                "draftRanksByRankType": { "STANDARD": { "rank": 2 } },
+                "stats": [
+                  { "seasonId": 2026, "statSourceId": 1, "statSplitTypeId": 1, "scoringPeriodId": 6, "appliedTotal": 21.7, "stats": {} },
+                  { "seasonId": 2026, "statSourceId": 1, "statSplitTypeId": 0, "appliedTotal": 355.2, "stats": {} },
+                  { "seasonId": 2026, "statSourceId": 0, "statSplitTypeId": 0, "appliedTotal": 118.6, "stats": {} },
+                  { "seasonId": 2026, "statSourceId": 0, "statSplitTypeId": 1, "scoringPeriodId": 1, "appliedTotal": 24.1, "stats": { "53": 0 } },
+                  { "seasonId": 2026, "statSourceId": 0, "statSplitTypeId": 1, "scoringPeriodId": 2, "appliedTotal": 18.3, "stats": {} },
+                  { "seasonId": 2026, "statSourceId": 0, "statSplitTypeId": 1, "scoringPeriodId": 9, "appliedTotal": 0, "stats": {} },
+                  { "seasonId": 2025, "statSourceId": 0, "statSplitTypeId": 0, "appliedTotal": 410.9, "stats": {} }
+                ]
+              }
+            }
+          },
+          {
+            "playerId": 4241457,
+            "lineupSlotId": 20,
+            "playerPoolEntry": {
+              "player": {
+                "id": 4241457,
+                "firstName": "Fixture",
+                "lastName": "Runningback",
+                "defaultPositionId": 2,
+                "eligibleSlots": [2, 3, 23, 7, 20, 21],
+                "proTeamId": 33,
+                "injuryStatus": "QUESTIONABLE",
+                "ownership": { "percentOwned": 71.2, "percentChange": 12.4, "percentStarted": 55.1 },
+                "stats": [
+                  { "seasonId": 2026, "statSourceId": 1, "statSplitTypeId": 1, "scoringPeriodId": 6, "appliedTotal": 13.2, "stats": {} }
+                ]
+              }
+            }
+          },
+          {
+            "playerId": 999001,
+            "lineupSlotId": 21,
+            "playerPoolEntry": {
+              "player": {
+                "id": 999001,
+                "fullName": "Fixture Injured",
+                "defaultPositionId": 3,
+                "eligibleSlots": [4, 23, 20, 21],
+                "proTeamId": 21,
+                "injured": true,
+                "ownership": { "percentOwned": 40.1, "percentChange": -8.3 },
+                "stats": []
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "location": "Fixture",
+      "nickname": "Two",
+      "abbrev": "FX2",
+      "owners": ["{DEF-456}"],
+      "record": { "overall": { "wins": 2, "losses": 3, "ties": 0, "pointsFor": 498.1, "pointsAgainst": 537.4 } },
+      "transactionCounter": { "acquisitionBudgetSpent": 0 },
+      "roster": { "entries": [] }
+    }
+  ],
+  "schedule": [
+    {
+      "matchupPeriodId": 6,
+      "winner": "UNDECIDED",
+      "home": { "teamId": 1, "totalPoints": 62.4, "totalProjectedPointsLive": 118.9 },
+      "away": { "teamId": 2, "totalPoints": 58.1, "totalProjectedPointsLive": 112.3 }
+    }
+  ]
+}

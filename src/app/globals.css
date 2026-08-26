@@ -1,0 +1,34 @@
+@import "tailwindcss";
+
+@theme {
+  --color-pitch-950: #07100c;
+  --color-pitch-900: #0c1912;
+  --color-pitch-800: #12241a;
+  --color-pitch-700: #1b3527;
+  --color-chalk-100: #eef5f0;
+  --color-chalk-300: #b6c9bd;
+  --color-chalk-500: #7d9488;
+  --color-gain-400: #4ade80;
+  --color-gain-600: #16a34a;
+  --color-loss-400: #f87171;
+  --color-loss-600: #dc2626;
+  --color-flag-400: #fbbf24;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  background:
+    radial-gradient(1200px 600px at 50% -10%, var(--color-pitch-800), transparent 70%),
+    var(--color-pitch-950);
+  color: var(--color-chalk-100);
+  min-height: 100vh;
+}
+
+/* Numeric columns line up only with tabular figures; without this every
+   points column jitters as values change during live scoring. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
