@@ -128,3 +128,33 @@ export async function fetchCoaches(season: number): Promise<Map<string, string>>
   }
   return out;
 }
+
+export interface ScheduledGame {
+  season: number;
+  week: number;
+  home: string;
+  away: string;
+}
+
+/**
+ * The fixture list for a season, played or not.
+ *
+ * Used for the weeks that decide a fantasy season, which are known months in
+ * advance even though nothing about the teams is.
+ */
+export async function fetchScheduledGames(season: number): Promise<ScheduledGame[]> {
+  const { text } = await fetchTextCached(SOURCE_URL, "games.csv", {
+    ttlMs: 24 * 60 * 60 * 1000,
+    timeoutSeconds: 90,
+  });
+
+  const out: ScheduledGame[] = [];
+  for (const row of parseCsv(text)) {
+    if (num(row.season) !== season) continue;
+    if (row.game_type && row.game_type !== "REG") continue;
+    const week = num(row.week);
+    if (week === undefined || !row.home_team || !row.away_team) continue;
+    out.push({ season, week, home: row.home_team, away: row.away_team });
+  }
+  return out;
+}
