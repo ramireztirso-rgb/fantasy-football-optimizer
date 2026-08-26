@@ -34,6 +34,8 @@ export interface PlayerIdentity {
   /** Overall selection. Undrafted free agents have none. */
   draftPick?: number;
   age?: number;
+  /** ISO date, which is what makes age at a *past* season computable. */
+  birthdate?: string;
 }
 
 export interface PlayerIdIndex {
@@ -68,6 +70,7 @@ export async function fetchPlayerIdIndex(): Promise<PlayerIdIndex> {
       draftRound: num(row.draft_round),
       draftPick: num(row.draft_ovr),
       age: num(row.age),
+      birthdate: clean(row.birthdate),
     };
 
     // The file carries a row per player-season; the most recent wins, which is
@@ -96,4 +99,22 @@ export function experienceIn(identity: PlayerIdentity, season: number): number |
 function clean(value: string | undefined): string | undefined {
   if (!value || value === "NA" || value === "null") return undefined;
   return value;
+}
+
+/**
+ * A player's age at the start of a given season.
+ *
+ * Computed from the birth date rather than the crosswalk's `age` column, which
+ * is his age now. Using that for a season eight years ago would make everybody
+ * in the sample the same age as each other, which is the one thing an age study
+ * cannot survive.
+ */
+export function ageAtSeason(identity: PlayerIdentity, season: number): number | null {
+  if (!identity.birthdate) return null;
+  const born = new Date(identity.birthdate);
+  if (Number.isNaN(born.getTime())) return null;
+  // Seasons open in early September.
+  const kickoff = new Date(Date.UTC(season, 8, 1));
+  const years = (kickoff.getTime() - born.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+  return years > 15 && years < 50 ? Math.round(years * 10) / 10 : null;
 }

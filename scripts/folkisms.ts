@@ -20,8 +20,10 @@ loadEnvFile(".env");
 const { credentialsFromEnv } = await import("../src/lib/espn/client");
 const { fetchLeague } = await import("../src/lib/espn/league");
 const { fetchWeeklyStats } = await import("../src/lib/sources/nflverse");
-const { fetchGameContext, impliedTotalFor } = await import("../src/lib/sources/schedules");
-const { fetchPlayerIdIndex } = await import("../src/lib/sources/playerIds");
+const { fetchGameContext, impliedTotalFor, spreadFor } = await import(
+  "../src/lib/sources/schedules"
+);
+const { fetchPlayerIdIndex, ageAtSeason } = await import("../src/lib/sources/playerIds");
 const { scoreStatLine } = await import("../src/lib/engine/scoreFromStats");
 const { judge, renderScorecard, mean, stdev, percentile } = await import(
   "../src/lib/analysis/scorecard"
@@ -87,6 +89,12 @@ async function main() {
   findings.push(impliedTotalMatters(games, "RB"));
   findings.push(impliedTotalMatters(games, "WR"));
   findings.push(thursdayNightNoise(games));
+  findings.push(ageCliffEfficiency(playerSeasons, ids));
+  findings.push(ageCliffWorkload(playerSeasons, ids));
+  findings.push(underdogEffect(games, "WR"));
+  findings.push(underdogEffect(games, "RB"));
+  findings.push(windKillsPassing(games));
+  findings.push(domeBoost(games));
 
   console.log(renderScorecard(findings));
 }
@@ -233,6 +241,134 @@ function thursdayNightNoise(games: Game[]): Finding {
     { label: "Thursday games", values: thursday },
     "pts",
     { expect: "decrease", practicalThreshold: 1 },
+  );
+}
+
+/**
+ * "Backs fall off a cliff at 27 or 28."
+ *
+ * Split in two, because the claim never says which thing is supposed to
+ * collapse. This half asks whether an older back is worse *with the ball* --
+ * points per touch, which is efficiency and nothing to do with how often his
+ * coach uses him.
+ */
+function ageCliffEfficiency(
+  playerSeasons: Game[][],
+  ids: Awaited<ReturnType<typeof fetchPlayerIdIndex>>,
+): Finding {
+  const young: number[] = [];
+  const old: number[] = [];
+  for (const weeks of playerSeasons) {
+    if (weeks[0].position !== "RB") continue;
+    const identity = ids.byGsisId.get(weeks[0].gsisId);
+    if (!identity) continue;
+    const age = ageAtSeason(identity, weeks[0].season);
+    if (age === null) continue;
+    const touches = weeks.reduce((n, w) => n + w.touches, 0);
+    if (touches < 80) continue;
+    const perTouch = weeks.reduce((n, w) => n + w.points, 0) / touches;
+    if (age <= 25) young.push(perTouch);
+    else if (age >= 28) old.push(perTouch);
+  }
+  return judge(
+    "Backs 28+ do less with each touch",
+    { label: "backs 25 and under", values: young },
+    { label: "backs 28 and over", values: old },
+    "pts per touch",
+    { expect: "decrease", practicalThreshold: 0.05 },
+  );
+}
+
+/** The other half: are they given the ball less? */
+function ageCliffWorkload(
+  playerSeasons: Game[][],
+  ids: Awaited<ReturnType<typeof fetchPlayerIdIndex>>,
+): Finding {
+  const young: number[] = [];
+  const old: number[] = [];
+  for (const weeks of playerSeasons) {
+    if (weeks[0].position !== "RB") continue;
+    const identity = ids.byGsisId.get(weeks[0].gsisId);
+    if (!identity) continue;
+    const age = ageAtSeason(identity, weeks[0].season);
+    if (age === null) continue;
+    const perGame = mean(weeks.map((w) => w.touches));
+    if (age <= 25) young.push(perGame);
+    else if (age >= 28) old.push(perGame);
+  }
+  return judge(
+    "Backs 28+ are given the ball less",
+    { label: "backs 25 and under", values: young },
+    { label: "backs 28 and over", values: old },
+    "touches a game",
+    { expect: "decrease", practicalThreshold: 1.5 },
+  );
+}
+
+/**
+ * "When a team is a big underdog, fade the back and start the receivers."
+ *
+ * The one game-script claim with a clear mechanism: a team expected to trail
+ * throws to catch up. Run per position because the claim says opposite things
+ * about them, and a single team-level answer would average the two away.
+ */
+function underdogEffect(games: Game[], position: string): Finding {
+  const favoured: number[] = [];
+  const underdog: number[] = [];
+  for (const g of games) {
+    if (g.position !== position || !g.context) continue;
+    if (g.touches < 5 && g.targets < 5) continue;
+    const spread = spreadFor(g.team, g.context);
+    if (spread === null) continue;
+    if (spread >= 3) favoured.push(g.points);
+    else if (spread <= -7) underdog.push(g.points);
+  }
+  const expectMore = position !== "RB";
+  return judge(
+    `${position}s ${expectMore ? "gain" : "lose"} when their team is a big underdog`,
+    { label: "favoured games", values: favoured },
+    { label: "7+ point underdog games", values: underdog },
+    "pts",
+    { expect: expectMore ? "increase" : "decrease", practicalThreshold: 1 },
+  );
+}
+
+/** "Wind ruins the passing game." */
+function windKillsPassing(games: Game[]): Finding {
+  const calm: number[] = [];
+  const windy: number[] = [];
+  for (const g of games) {
+    if (g.position !== "QB" || !g.context || g.context.wind === null) continue;
+    if (g.passingYards < 50) continue;
+    if (g.context.wind >= 15) windy.push(g.points);
+    else if (g.context.wind <= 5) calm.push(g.points);
+  }
+  return judge(
+    "Quarterbacks score less in high wind",
+    { label: "calm games", values: calm },
+    { label: "15+ mph wind", values: windy },
+    "pts",
+    { expect: "decrease", practicalThreshold: 1 },
+  );
+}
+
+/** "Indoors is a passing paradise." */
+function domeBoost(games: Game[]): Finding {
+  const outdoors: number[] = [];
+  const indoors: number[] = [];
+  for (const g of games) {
+    if (g.position !== "QB" || !g.context) continue;
+    if (g.passingYards < 50) continue;
+    const roof = g.context.roof.toLowerCase();
+    if (roof.includes("dome") || roof.includes("closed")) indoors.push(g.points);
+    else if (roof.includes("outdoor")) outdoors.push(g.points);
+  }
+  return judge(
+    "Quarterbacks score more indoors",
+    { label: "outdoor games", values: outdoors },
+    { label: "indoor games", values: indoors },
+    "pts",
+    { expect: "increase", practicalThreshold: 1 },
   );
 }
 
