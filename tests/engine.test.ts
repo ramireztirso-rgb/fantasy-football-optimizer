@@ -279,3 +279,40 @@ describe("draft board notes", () => {
     expect(cliffs.some((n) => n.code === "cliff_K" || n.code === "cliff_DST")).toBe(false);
   });
 });
+
+describe("survival with a measured spread", () => {
+  const player = {
+    id: 1,
+    name: "Test Player",
+    position: "RB",
+    averageDraftPosition: 100,
+  } as unknown as Parameters<typeof survivalProbability>[0];
+
+  // The estimate scales the spread with the ADP itself -- 28% of it -- so a
+  // player going 100th is assumed to vary by 28 picks purely as arithmetic.
+  // A measured spread replaces that, and in the middle rounds where most
+  // decisions actually happen the two disagree enough to change the call.
+  it("prefers a measured spread over the estimate", () => {
+    const estimated = survivalProbability(player, 90, 114);
+    const measured = survivalProbability(player, 90, 114, 12);
+    expect(estimated).toBeGreaterThan(0.25);
+    expect(measured).toBeLessThan(0.15);
+  });
+
+  it("falls back to the estimate when the market has no quote", () => {
+    expect(survivalProbability(player, 90, 114, undefined)).toBe(
+      survivalProbability(player, 90, 114),
+    );
+  });
+
+  // A tiny reported deviation must not collapse the distribution to a step
+  // function; consensus is never that certain.
+  it("floors an implausibly tight measured spread", () => {
+    expect(survivalProbability(player, 90, 101, 0)).toBeGreaterThan(0);
+    expect(survivalProbability(player, 90, 101, 0)).toBeLessThan(1);
+  });
+
+  it("still returns certainty when the target pick is now", () => {
+    expect(survivalProbability(player, 90, 90, 3)).toBe(1);
+  });
+});

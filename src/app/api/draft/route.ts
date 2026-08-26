@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDraftPoolData, getLeague, toErrorResponse } from "@/lib/data";
 import { buildDraftBoard, type DraftState } from "@/lib/engine/draft";
+import { fetchAdpMarket } from "@/lib/sources/adp";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +23,11 @@ export async function POST(request: Request) {
     const { data: league, isDemo } = await getLeague();
     const { data: pool } = await getDraftPoolData();
 
+    // Measured draft-slot spreads, when the market is reachable. A failure here
+    // costs accuracy in the survival model and nothing else, so it is caught
+    // rather than propagated: no outside source gets to break a live draft.
+    const market = await fetchAdpMarket(league.settings).catch(() => undefined);
+
     const byId = new Map(pool.map((p) => [p.id, p]));
     const myRoster = (body.myRosterIds ?? [])
       .map((id) => byId.get(id))
@@ -34,6 +40,7 @@ export async function POST(request: Request) {
       nextPickNumber: body.nextPickNumber ?? pickNumber + (league.settings.size || 12),
       drafted: new Set([...(body.drafted ?? []), ...(body.myRosterIds ?? [])]),
       myRoster,
+      market,
     };
 
     const board = buildDraftBoard(pool, league.settings, state, Math.min(60, body.limit ?? 30));

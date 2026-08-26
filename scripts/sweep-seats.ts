@@ -30,6 +30,7 @@ const { buildDraftBoard } = await import("../src/lib/engine/draft");
 const { expandSlots } = await import("../src/lib/engine/lineup");
 const { maxValueAssignment } = await import("../src/lib/engine/assignment");
 const { SLOT_ELIGIBILITY } = await import("../src/lib/espn/constants");
+const { fetchAdpMarket } = await import("../src/lib/sources/adp");
 
 type Player = Awaited<ReturnType<typeof fetchDraftPool>>[number];
 type DraftStatus = Awaited<ReturnType<typeof fetchDraftStatus>>;
@@ -57,6 +58,7 @@ async function main() {
     fetchDraftStatus(creds),
     getHistoricalDrafts(4),
   ]);
+  const market = await fetchAdpMarket(league.settings).catch(() => undefined);
 
   const settings = league.settings;
   const size = settings.size;
@@ -83,6 +85,12 @@ async function main() {
     `Rival model: ${tendencies.seasonsAnalyzed.join(", ")} · ${model.sample} picks` +
       (model.isNaive ? "  ⚠ too thin to bend ADP, falling back to market order" : ""),
   );
+  console.log(
+    market
+      ? `ADP market: ${market.quoted} players across ${market.sample} mock drafts` +
+          `${market.stale ? " (stale cache)" : ""} · spreads measured, not estimated`
+      : `ADP market: unavailable, falling back to estimated spreads`,
+  );
   console.log(`Pool: ${pool.length} players · ${sims} simulations per seat\n`);
 
   const otherTeams = league.teams.map((t) => t.id).filter((id) => id !== myTeamId);
@@ -104,7 +112,7 @@ async function main() {
       // arrangement rather than the seat.
       const rand = lcg(seat * 1000 + s + 1);
       const pickOrder = seatOrder(myTeamId, otherTeams, seat, rand);
-      const roster = runDraft({ pool, settings, live, league, model, pickOrder, myTeamId, rounds, size, rand });
+      const roster = runDraft({ pool, settings, live, league, model, market, pickOrder, myTeamId, rounds, size, rand });
 
       result.starterPoints.push(startingLineupValue(roster, settings));
       result.shapes.push(shapeOf(roster));
@@ -125,6 +133,7 @@ interface DraftArgs {
   live: DraftStatus;
   league: League;
   model: ReturnType<typeof buildRivalModel>;
+  market: Awaited<ReturnType<typeof fetchAdpMarket>> | undefined;
   pickOrder: number[];
   myTeamId: number;
   rounds: number;
@@ -138,6 +147,7 @@ function runDraft({
   live,
   league,
   model,
+  market,
   pickOrder,
   myTeamId,
   rounds,
@@ -177,6 +187,7 @@ function runDraft({
           drafted: ctx.draftedIds,
           myRoster: ctx.myRoster,
           live: ctx,
+          market,
         },
         10,
       );

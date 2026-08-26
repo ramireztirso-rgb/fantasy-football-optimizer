@@ -31,6 +31,7 @@ const { buildLiveDraftContext, courseCorrection, snakePicksForSlot, teamAtPick }
   "../src/lib/engine/draftLive"
 );
 const { buildDraftBoard } = await import("../src/lib/engine/draft");
+const { fetchAdpMarket } = await import("../src/lib/sources/adp");
 const { mandatoryStarters } = await import("../src/lib/engine/replacement");
 
 type Player = Awaited<ReturnType<typeof fetchDraftPool>>[number];
@@ -55,6 +56,7 @@ async function main() {
     fetchLeague(creds),
     fetchDraftStatus(creds),
   ]);
+  const market = await fetchAdpMarket(league.settings).catch(() => undefined);
 
   const settings = league.settings;
   const size = settings.size;
@@ -149,6 +151,7 @@ async function main() {
           drafted: ctx.draftedIds,
           myRoster: ctx.myRoster,
           live: ctx,
+          market,
         },
         25,
       );

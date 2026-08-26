@@ -23,6 +23,19 @@ export { rosterNeed };
  * the survival probability derived from ADP.
  */
 
+/**
+ * A measured view of where the market drafts a player.
+ *
+ * Declared structurally rather than imported so the engine keeps no dependency
+ * on how the data arrives. Whatever supplies it -- a live ADP board, a cached
+ * file, a test fixture -- the board only asks two questions.
+ */
+export interface AdpSpreadSource {
+  /** Measured standard deviation of a player's draft slot, in picks. */
+  stdevFor(player: Player): number | undefined;
+  quoteFor?(player: Player): { adp: number; stdev: number; timesDrafted: number } | undefined;
+}
+
 export interface DraftState {
   /** Overall pick number currently on the clock. */
   pickNumber: number;
@@ -37,6 +50,11 @@ export interface DraftState {
    * model from national ADP to what the specific teams ahead of you still need.
    */
   live?: LiveDraftContext;
+  /**
+   * Measured draft-slot spreads. Absent, the board estimates them, which is
+   * worse but never fatal: an outside source must not be able to break a draft.
+   */
+  market?: AdpSpreadSource;
 }
 
 export interface DraftRecommendation {
@@ -258,7 +276,13 @@ function score(proj: Projection, ctx: ScoreContext): DraftRecommendation {
   }
 
   // --- Survival: will they be there at my next turn? ---
-  const adpSurvival = survivalProbability(player, ctx.state.pickNumber, ctx.state.nextPickNumber);
+  const measuredSd = ctx.state.market?.stdevFor(player);
+  const adpSurvival = survivalProbability(
+    player,
+    ctx.state.pickNumber,
+    ctx.state.nextPickNumber,
+    measuredSd,
+  );
   const intervening = ctx.state.live?.interveningTeams ?? [];
 
   // When connected to a live draft, what the teams ahead of you actually need
@@ -438,11 +462,18 @@ export function survivalProbability(
   player: Player,
   currentPick: number,
   targetPick: number,
+  measuredSd?: number,
 ): number {
   const adp = player.averageDraftPosition;
   if (!Number.isFinite(adp)) return 0.95; // undrafted in ESPN's data: almost certainly lasts
   if (targetPick <= currentPick) return 1;
-  const sd = Math.max(4, adp * 0.28);
+  // A measured spread beats a modelled one. The fallback -- 28% of the
+  // player's own ADP -- says a player going 100th is drafted within a
+  // 28-pick band and one going 10th within three, purely because the
+  // arithmetic scales with the mean. Real boards do not behave that way:
+  // consensus is tight at the very top, widens through the middle rounds
+  // where opinion actually differs, and is anyone's guess at the end.
+  const sd = measuredSd !== undefined ? Math.max(1.5, measuredSd) : Math.max(4, adp * 0.28);
   // P(drafted after targetPick) = 1 - CDF(targetPick)
   return clamp01(1 - normalCdf((targetPick - adp) / sd));
 }
