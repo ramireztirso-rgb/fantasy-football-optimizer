@@ -31,6 +31,8 @@ export interface SeasonStatLine {
   receivingYards: number;
   receivingTds: number;
   receivingFirstDowns: number;
+  /** Rushing attempts. Workload, as distinct from what the workload produced. */
+  carries: number;
   rushingYards: number;
   rushingTds: number;
   rushingFirstDowns: number;
@@ -78,6 +80,7 @@ export async function fetchSeasonStats(season: number): Promise<SeasonStatLine[]
         receivingYards: 0,
         receivingTds: 0,
         receivingFirstDowns: 0,
+        carries: 0,
         rushingYards: 0,
         rushingTds: 0,
         rushingFirstDowns: 0,
@@ -98,6 +101,7 @@ export async function fetchSeasonStats(season: number): Promise<SeasonStatLine[]
     line.receivingYards += num(row.receiving_yards) ?? 0;
     line.receivingTds += num(row.receiving_tds) ?? 0;
     line.receivingFirstDowns += num(row.receiving_first_downs) ?? 0;
+    line.carries += num(row.carries) ?? 0;
     line.rushingYards += num(row.rushing_yards) ?? 0;
     line.rushingTds += num(row.rushing_tds) ?? 0;
     line.rushingFirstDowns += num(row.rushing_first_downs) ?? 0;
