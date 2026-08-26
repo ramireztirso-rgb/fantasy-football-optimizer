@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "verify": "tsx --conditions=react-server scripts/verify-espn.ts"
+    "verify": "tsx --conditions=react-server scripts/verify-espn.ts",
+    "replay": "tsx --conditions=react-server scripts/replay-draft.ts"
   },
   "dependencies": {
     "next": "^16.3.3",
