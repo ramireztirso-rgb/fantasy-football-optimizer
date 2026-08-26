@@ -102,14 +102,13 @@ export function buildDraftBoard(
 ): DraftBoard {
   // Season-long projections drive draft value; the weekly number is noise here.
   const opts = { week: 1 } as const;
-  const available = pool.filter((p) => !state.drafted.has(p.id));
-
-  const projections = available.map((p) => {
+  const project = (p: Player) => {
     const proj = projectPlayer(p, opts);
     // Swap in the season projection as the value being ranked.
     return { ...proj, points: p.seasonProjectedPoints || proj.points * 17 };
-  });
+  };
 
+  const projections = pool.filter((p) => !state.drafted.has(p.id)).map(project);
   const replacementLevels = computeReplacementLevels(projections, settings);
   const need = rosterNeed(state.myRoster, settings);
 
@@ -234,12 +233,24 @@ function score(proj: Projection, ctx: ScoreContext): DraftRecommendation {
     // highest on the board long after the roster has stopped being able to use
     // it. The surplus term is what makes each additional one worth less than
     // the last.
-    const surplus = Math.max(0, ctx.owned[pos] - (ctx.perTeamDemand[pos] ?? 0));
-    const rate = Math.min(0.65, 0.12 + 0.14 * surplus);
+    // Measured against the position's own demand, not in absolute players. A
+    // second quarterback in a one-quarterback league is a whole surplus
+    // starter; a fourth running back where you start two and a half is a
+    // fifth of one. Penalising them equally is what leaves the board rostering
+    // three quarterbacks it can never start two of.
+    const demand = Math.max(0.5, ctx.perTeamDemand[pos] ?? 1);
+    const surplus = Math.max(0, ctx.owned[pos] - demand);
+    // Each surplus starter's worth of depth halves what the next one is worth.
+    // A first backup is insurance and holds real value; a fourth is a roster
+    // spot you set on fire. A fixed rate, however steep, cannot express that,
+    // and a capped one leaves the deepest position on the roster still winning
+    // picks.
+    const depth = Math.ceil(surplus / demand);
+    const rate = 1 - 0.88 * Math.pow(0.5, depth);
     b.add(
       "position_filled",
-      surplus >= 1.5 ? `${pos} is your deepest position` : "Position already filled",
-      surplus >= 1.5
+      surplus >= demand ? `${pos} is your deepest position` : "Position already filled",
+      surplus >= demand
         ? `You already carry ${ctx.owned[pos]} ${pos}${ctx.owned[pos] === 1 ? "" : "s"} against ${(ctx.perTeamDemand[pos] ?? 0).toFixed(1)} starting spots. Another one cannot crack your lineup, so his value here is a fraction of his projection.`
         : `Your ${pos} starting slots are already covered, so this player's value only shows up as depth or a trade chip.`,
       -vorpValue * rate,
