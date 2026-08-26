@@ -14,7 +14,8 @@
     "verify": "tsx --conditions=react-server scripts/verify-espn.ts",
     "replay": "tsx --conditions=react-server scripts/replay-draft.ts",
     "sweep": "tsx --conditions=react-server scripts/sweep-seats.ts",
-    "study": "tsx --conditions=react-server scripts/study-breakouts.ts"
+    "study": "tsx --conditions=react-server scripts/study-breakouts.ts",
+    "compare": "tsx --conditions=react-server scripts/compare-projections.ts"
   },
   "dependencies": {
     "next": "^16.3.3",
