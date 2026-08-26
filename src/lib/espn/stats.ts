@@ -1,3 +1,5 @@
+import type { Position } from "@/lib/domain/types";
+
 /**
  * ESPN stat-id vocabulary.
  *
@@ -75,25 +77,93 @@ export function statLabel(statId: number): string {
 }
 
 /**
+ * ESPN position ids, which are what `pointsOverrides` is keyed by.
+ *
+ * This is the crux of the whole module. An override map like
+ * `{"1": 6, "2": 5.5, "3": 5.5, "4": 5.5}` is not one value under an opaque
+ * key -- it is a league saying a rushing touchdown pays a quarterback six
+ * points and everybody else five and a half. Key 16 is D/ST, which is why
+ * defensive rules appear to have a single override: only one position can
+ * record a sack.
+ */
+const POSITION_ID: Record<Position, number> = { QB: 1, RB: 2, WR: 3, TE: 4, K: 5, DST: 16 };
+
+/**
+ * The position a stat category belongs to, used to pick a representative value
+ * when a caller asks what a rule is worth without naming a position.
+ */
+const HOME_POSITION: Partial<Record<StatMeta["category"], Position>> = {
+  passing: "QB",
+  rushing: "RB",
+  receiving: "WR",
+  kicking: "K",
+  defense: "DST",
+};
+
+/**
+ * Every position-specific value a scoring item carries, or null when the rule
+ * pays the same regardless of who records it.
+ *
+ * A position absent from the map is not missing data: it is the league
+ * declining to pay that position for this stat at all. Leagues that give
+ * receivers half a point per catch but running backs nothing express it
+ * exactly this way, and reading it as "unknown, assume the default" inverts
+ * the rule.
+ */
+export function scoringPointsByPosition(item: {
+  points?: number;
+  pointsOverrides?: Record<string, number>;
+}): Partial<Record<Position, number>> | null {
+  const overrides = item.pointsOverrides;
+  if (!overrides) return null;
+
+  const byPosition: Partial<Record<Position, number>> = {};
+  let sawAny = false;
+  for (const [pos, id] of Object.entries(POSITION_ID) as Array<[Position, number]>) {
+    const value = overrides[String(id)];
+    if (typeof value === "number") {
+      byPosition[pos] = value;
+      sawAny = true;
+    } else {
+      byPosition[pos] = 0;
+    }
+  }
+  return sawAny ? byPosition : null;
+}
+
+/**
  * The point value a scoring item actually carries in this league.
  *
  * ESPN keeps the platform default in `points` and puts a league's customized
- * value in `pointsOverrides`, keyed by scoring-rule-set id. When a league
- * customizes a rule, `points` is frequently left at the default (often 0), so
- * reading `points` alone silently misreads every custom rule in the league.
- * The override wins whenever one is present.
+ * value in `pointsOverrides`. When a league customizes a rule, `points` is
+ * frequently left at the default (often 0), so reading `points` alone silently
+ * misreads every custom rule in the league.
+ *
+ * Pass `position` whenever the answer could depend on it -- which, in a league
+ * that scores by position, is every offensive rule. Without one this returns a
+ * representative value: the shared value if the positions agree, otherwise
+ * whatever the stat's home position earns, since "what is a rushing touchdown
+ * worth" most usefully means "worth to a running back".
  */
-export function effectiveScoringPoints(item: {
-  points?: number;
-  pointsOverrides?: Record<string, number>;
-}): number {
-  const overrides = item.pointsOverrides;
-  if (overrides) {
-    // Key 16 is the head-to-head rule set ESPN uses for standard fantasy
-    // football leagues; fall back to whatever single override is present.
-    if (typeof overrides["16"] === "number") return overrides["16"];
-    const values = Object.values(overrides).filter((v) => typeof v === "number");
-    if (values.length === 1) return values[0];
-  }
+export function effectiveScoringPoints(
+  item: {
+    statId?: number;
+    points?: number;
+    pointsOverrides?: Record<string, number>;
+  },
+  position?: Position,
+): number {
+  const byPosition = scoringPointsByPosition(item);
+  if (!byPosition) return item.points ?? 0;
+
+  if (position) return byPosition[position] ?? 0;
+
+  const present = Object.values(item.pointsOverrides ?? {}).filter((v) => typeof v === "number");
+  if (present.length && present.every((v) => v === present[0])) return present[0];
+
+  const category = item.statId === undefined ? undefined : STAT_META[item.statId]?.category;
+  const home = category ? HOME_POSITION[category] : undefined;
+  if (home && byPosition[home] !== undefined) return byPosition[home] as number;
+
   return item.points ?? 0;
 }

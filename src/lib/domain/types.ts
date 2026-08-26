@@ -81,8 +81,19 @@ export interface LineupSlotCount {
 
 export interface ScoringRule {
   statId: number;
-  /** Points per unit as this league actually scores it, overrides applied. */
+  /**
+   * Points per unit as this league actually scores it, overrides applied.
+   * Representative only when `pointsByPosition` is set -- see that field.
+   */
   points: number;
+  /**
+   * Present when the league pays different positions differently for this
+   * stat, which ESPN allows and some leagues use heavily: half a point per
+   * reception for receivers and tight ends but nothing for running backs, say.
+   * A position reading 0 here earns nothing for the stat; it is a rule, not a
+   * gap in the data.
+   */
+  pointsByPosition?: Partial<Record<Position, number>>;
   /** The platform default, for spotting what this league customized. */
   standard?: number;
 }

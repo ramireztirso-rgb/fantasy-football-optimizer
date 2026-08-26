@@ -6,7 +6,7 @@ import {
   STAT_SOURCE,
   STAT_SPLIT,
 } from "./constants";
-import { effectiveScoringPoints, STAT_META } from "./stats";
+import { effectiveScoringPoints, scoringPointsByPosition, STAT_META } from "./stats";
 import type {
   RawDraftDetail,
   RawLeagueResponse,
@@ -212,11 +212,16 @@ export function normalizeSettings(raw: RawLeagueResponse, week: number): LeagueS
         // effectiveScoringPoints. Reading `points` alone misses every rule the
         // league customized.
         points: effectiveScoringPoints(i),
+        pointsByPosition: scoringPointsByPosition(i) ?? undefined,
         standard: STAT_META[statId]?.standard,
       };
     });
-  // Stat 53 is receptions; its value is what makes a league PPR, half-PPR, or standard.
-  const reception = scoringRules.find((r) => r.statId === 53)?.points ?? 0;
+  // Stat 53 is receptions; its value is what makes a league PPR, half-PPR, or
+  // standard. Read it at wide receiver specifically: a league can pay catches
+  // to receivers and tight ends but not to running backs, and the headline
+  // "is this PPR" question is asking about receivers.
+  const receptionRule = scoringRules.find((r) => r.statId === 53);
+  const reception = receptionRule?.pointsByPosition?.WR ?? receptionRule?.points ?? 0;
 
   return {
     name: s.name ?? "ESPN League",

@@ -1,5 +1,5 @@
 import type { LeagueSettings, Player, Position } from "@/lib/domain/types";
-import { STAT_META, statLabel } from "@/lib/espn/stats";
+import { STAT_META, statLabel, type StatMeta } from "@/lib/espn/stats";
 import { starterDemand } from "./replacement";
 
 /**
@@ -38,11 +38,31 @@ export interface RosterDeviation {
   detail: string;
 }
 
+/**
+ * A rule the league prices differently depending on who records the stat.
+ *
+ * This is the format detail most likely to be missed, because nothing on the
+ * league page looks unusual: the headline still reads "half PPR". Only when
+ * you notice that running backs are excluded from it does the draft board
+ * change shape.
+ */
+export interface PositionScopedRule {
+  statId: number;
+  label: string;
+  /** Points per unit at each position that earns anything for this stat. */
+  paid: Array<{ position: Position; points: number }>;
+  /** Positions the league pays nothing for this stat, despite others earning. */
+  excluded: Position[];
+  detail: string;
+}
+
 export interface ScoringProfile {
   /** One-line characterization, e.g. "12-team, 0.5 PPR, 6-point passing TDs". */
   summary: string;
   deviations: ScoringDeviation[];
   rosterDeviations: RosterDeviation[];
+  /** Rules whose value depends on the position of the player who earned it. */
+  positionScoped: PositionScopedRule[];
   /** Ranked strategic consequences, most actionable first. */
   implications: string[];
   /** True when nothing meaningfully departs from the default rule set. */
@@ -80,11 +100,16 @@ export function buildScoringProfile(
     const meta = STAT_META[rule.statId];
     const standard = rule.standard ?? meta?.standard;
     if (standard === undefined) continue;
-    const delta = round3(rule.points - standard);
-    if (Math.abs(delta) < 0.001) continue;
 
     const baseline = BASELINE_VOLUME[rule.statId];
     if (!baseline) continue;
+
+    // Price the rule at the position whose volume we are about to multiply it
+    // by. Using the representative value instead would measure a receiver's
+    // catches at a quarterback's rate in any league that separates them.
+    const points = rule.pointsByPosition?.[baseline.position] ?? rule.points;
+    const delta = round3(points - standard);
+    if (Math.abs(delta) < 0.001) continue;
 
     const perGame = volume.get(rule.statId) ?? baseline.perGame;
     const perGameImpact = round2(delta * perGame);
@@ -93,24 +118,27 @@ export function buildScoringProfile(
     deviations.push({
       statId: rule.statId,
       label: statLabel(rule.statId),
-      leaguePoints: rule.points,
+      leaguePoints: points,
       standardPoints: standard,
       delta,
       perGameImpact,
       position: baseline.position,
-      detail: `${statLabel(rule.statId)} is worth ${formatPoints(rule.points)} here versus ${formatPoints(standard)} standard. At the ${baseline.position} volume in your league that is ${perGameImpact > 0 ? "+" : ""}${perGameImpact.toFixed(1)} points per game for a typical starter.`,
+      detail: `${statLabel(rule.statId)} is worth ${formatPoints(points)} here versus ${formatPoints(standard)} standard. At the ${baseline.position} volume in your league that is ${perGameImpact > 0 ? "+" : ""}${perGameImpact.toFixed(1)} points per game for a typical starter.`,
     });
   }
 
   deviations.sort((a, b) => Math.abs(b.perGameImpact) - Math.abs(a.perGameImpact));
 
   const rosterDeviations = analyzeRosterShape(settings);
+  const positionScoped = analyzePositionScoping(settings);
   return {
     summary: summarize(settings),
     deviations,
     rosterDeviations,
-    implications: buildImplications(settings, deviations, rosterDeviations),
-    isStandard: deviations.length === 0 && rosterDeviations.length === 0,
+    positionScoped,
+    implications: buildImplications(settings, deviations, rosterDeviations, positionScoped),
+    isStandard:
+      deviations.length === 0 && rosterDeviations.length === 0 && positionScoped.length === 0,
   };
 }
 
@@ -187,6 +215,7 @@ function buildImplications(
   settings: LeagueSettings,
   deviations: ScoringDeviation[],
   rosterDeviations: RosterDeviation[],
+  positionScoped: PositionScopedRule[] = [],
 ): string[] {
   const out: string[] = [];
 
@@ -203,8 +232,19 @@ function buildImplications(
     );
   }
 
+  // Receptions scoped away from running backs changes the advice completely,
+  // so it is checked before the headline PPR bands below.
+  const receptionScope = positionScoped.find((r) => r.statId === 53);
+  if (receptionScope?.excluded.includes("RB")) {
+    out.push(
+      `Receptions pay ${receptionScope.paid.map((p) => `${p.position} ${formatPoints(p.points)}`).join(", ")} but nothing to running backs. This is the single most important thing about this league's scoring: pass-catching backs carry none of the PPR premium every ranking list prices into them, while possession receivers and tight ends carry all of it.`,
+    );
+  }
+
   const reception = settings.pointsPerReception;
-  if (reception >= 0.9) {
+  if (receptionScope?.excluded.includes("RB")) {
+    // Already covered above, and the generic bands would contradict it.
+  } else if (reception >= 0.9) {
     out.push(
       `Full PPR: volume receivers and pass-catching backs are worth materially more than their yardage suggests. Target share is the stat to draft.`,
     );
@@ -216,6 +256,10 @@ function buildImplications(
     out.push(
       `Standard scoring, no PPR: touchdown-dependent backs and deep threats hold their value, and high-reception low-yardage players are traps.`,
     );
+  }
+
+  for (const ps of positionScoped) {
+    if (ps.statId !== 53) out.push(ps.detail);
   }
 
   for (const rd of rosterDeviations) out.push(rd.detail);
@@ -238,6 +282,52 @@ function buildImplications(
     );
   }
 
+  return out;
+}
+
+/**
+ * Rules that pay one position differently from another.
+ *
+ * Only positions that can plausibly record the stat are considered: every
+ * league on earth pays a kicker zero receiving yards, and reporting that as a
+ * league quirk would bury the one rule that actually matters.
+ */
+const CAN_RECORD: Partial<Record<StatMeta["category"], Position[]>> = {
+  passing: ["QB"],
+  rushing: ["QB", "RB", "WR"],
+  receiving: ["RB", "WR", "TE"],
+  kicking: ["K"],
+  defense: ["DST"],
+};
+
+function analyzePositionScoping(settings: LeagueSettings): PositionScopedRule[] {
+  const out: PositionScopedRule[] = [];
+
+  for (const rule of settings.scoringRules) {
+    const byPosition = rule.pointsByPosition;
+    if (!byPosition) continue;
+
+    const category = STAT_META[rule.statId]?.category;
+    const candidates = category ? CAN_RECORD[category] : undefined;
+    if (!candidates || candidates.length < 2) continue;
+
+    const paid = candidates
+      .filter((pos) => (byPosition[pos] ?? 0) !== 0)
+      .map((pos) => ({ position: pos, points: byPosition[pos] as number }));
+    const excluded = candidates.filter((pos) => (byPosition[pos] ?? 0) === 0);
+
+    // Uniform across everyone who could record it is not a quirk.
+    if (!paid.length || (!excluded.length && new Set(paid.map((p) => p.points)).size === 1)) {
+      continue;
+    }
+
+    const paidText = paid.map((p) => `${p.position} ${formatPoints(p.points)}`).join(", ");
+    const detail = excluded.length
+      ? `${statLabel(rule.statId)} pays ${paidText}, and nothing at all to ${excluded.join(" or ")}. Rankings built for this format's headline scoring will misprice ${excluded.join(" and ")} here.`
+      : `${statLabel(rule.statId)} is not worth the same to everyone: ${paidText}.`;
+
+    out.push({ statId: rule.statId, label: statLabel(rule.statId), paid, excluded, detail });
+  }
   return out;
 }
 
