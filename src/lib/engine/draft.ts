@@ -36,6 +36,20 @@ export interface AdpSpreadSource {
   quoteFor?(player: Player): { adp: number; stdev: number; timesDrafted: number } | undefined;
 }
 
+/**
+ * How far ESPN and the wider market have to differ before it is worth saying.
+ *
+ * Both conditions have to hold, because either alone flags the wrong players.
+ * A gap in picks alone scales with where a player goes -- six picks apart at
+ * the top of the board is a chasm and twenty picks apart at the end is noise --
+ * so the gap is also measured against the market's own spread. And that alone
+ * would flag a three-pick difference on a player the market is unusually
+ * certain about, which is real and useless. Statistically detectable and worth
+ * acting on are different questions; this asks both.
+ */
+const MARKET_DISAGREEMENT_PICKS = 8;
+const MARKET_DISAGREEMENT_SIGMA = 2;
+
 export interface DraftState {
   /** Overall pick number currently on the clock. */
   pickNumber: number;
@@ -451,6 +465,35 @@ function score(proj: Projection, ctx: ScoreContext): DraftRecommendation {
       `You already have ${byeClash} starters on a week ${player.byeWeek} bye; adding another means a thin lineup that week.`,
       -Math.min(3, byeClash),
     );
+  }
+
+  // --- Where the wider market disagrees with the platform ---
+  //
+  // Carried as information and not as score. The market view comes from
+  // thousands of drafts and is a fair second opinion on what a player is worth,
+  // but every number this board ranks on is ESPN's, so moving the score on this
+  // would be betting against ESPN's own projection using ESPN's own projection
+  // to keep score. It cannot be validated here, and a manager reading the board
+  // is better placed to judge it than an unvalidated coefficient.
+  //
+  // It matters most in this specific league because everyone in it drafts
+  // inside ESPN's room looking at ESPN's board: a player the market rates far
+  // higher than ESPN does is one who will likely still be sitting there.
+  const quote = ctx.state.market?.quoteFor?.(player);
+  if (quote && Number.isFinite(player.averageDraftPosition)) {
+    const gap = round2(player.averageDraftPosition - quote.adp);
+    // Floored: a spread the market reports as near zero would divide a trivial
+    // gap into a huge number of standard deviations.
+    const sigmas = Math.abs(gap) / Math.max(quote.stdev, 1.5);
+    if (Math.abs(gap) >= MARKET_DISAGREEMENT_PICKS && sigmas >= MARKET_DISAGREEMENT_SIGMA) {
+      b.note(
+        "market_disagreement",
+        gap > 0 ? "The market likes him more than ESPN" : "ESPN likes him more than the market",
+        gap > 0
+          ? `ESPN has him going around pick ${player.averageDraftPosition.toFixed(0)}, the wider market around ${quote.adp.toFixed(0)} across ${quote.timesDrafted} drafts. Your league drafts inside ESPN's room off ESPN's board, so he is likelier to be sitting there than his real price suggests.`
+          : `ESPN has him going around pick ${player.averageDraftPosition.toFixed(0)} against ${quote.adp.toFixed(0)} in the wider market across ${quote.timesDrafted} drafts. Your leaguemates see ESPN's number, so expect him to go earlier here than he would anywhere else -- and ask what the market knows that ESPN does not.`,
+      );
+    }
   }
 
   if (player.injuryStatus && player.injuryStatus.toUpperCase() !== "ACTIVE") {

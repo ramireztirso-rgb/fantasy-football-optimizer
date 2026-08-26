@@ -26,7 +26,13 @@ export async function POST(request: Request) {
     // Measured draft-slot spreads, when the market is reachable. A failure here
     // costs accuracy in the survival model and nothing else, so it is caught
     // rather than propagated: no outside source gets to break a live draft.
-    const market = await fetchAdpMarket(league.settings).catch(() => undefined);
+    const market = await fetchAdpMarket(league.settings).catch((err) => {
+      // Logged rather than swallowed. A silent fallback here is indistinguishable
+      // from the market simply agreeing with ESPN about everybody, which is not a
+      // thing anyone should have to guess at during a draft.
+      console.warn("[adp] market unavailable, falling back to estimated spreads:", err);
+      return undefined;
+    });
 
     const byId = new Map(pool.map((p) => [p.id, p]));
     const myRoster = (body.myRosterIds ?? [])

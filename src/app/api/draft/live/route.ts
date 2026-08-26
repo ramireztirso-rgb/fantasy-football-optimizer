@@ -31,7 +31,13 @@ export async function POST(request: Request) {
 
     // Measured draft-slot spreads. This is the path that runs during an actual
     // draft, so a failure here must cost accuracy and nothing else.
-    const market = await fetchAdpMarket(league.settings).catch(() => undefined);
+    const market = await fetchAdpMarket(league.settings).catch((err) => {
+      // Logged rather than swallowed. A silent fallback here is indistinguishable
+      // from the market simply agreeing with ESPN about everybody, which is not a
+      // thing anyone should have to guess at during a draft.
+      console.warn("[adp] market unavailable, falling back to estimated spreads:", err);
+      return undefined;
+    });
 
     const board = buildDraftBoard(
       pool,
