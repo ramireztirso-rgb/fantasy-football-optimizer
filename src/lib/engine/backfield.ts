@@ -1,6 +1,7 @@
 import type { Player } from "@/lib/domain/types";
 import type { SeasonStatLine } from "@/lib/sources/nflverse";
 import { normalizeTeam } from "./teamChange";
+export type { BackfieldSource } from "./draft";
 
 /**
  * Who actually gets the ball, and who is one hamstring away from getting it.

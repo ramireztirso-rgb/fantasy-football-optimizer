@@ -3,6 +3,7 @@ import { getDraftPoolData, getDraftStatus, getLeague, toErrorResponse } from "@/
 import { buildLiveDraftContext, courseCorrection } from "@/lib/engine/draftLive";
 import { buildDraftBoard } from "@/lib/engine/draft";
 import { fetchAdpMarket } from "@/lib/sources/adp";
+import { fetchBackfieldSource } from "@/lib/sources/backfieldSource";
 
 export const dynamic = "force-dynamic";
 
@@ -39,6 +40,13 @@ export async function POST(request: Request) {
       return undefined;
     });
 
+    // Backfield usage and durability. Purely additional -- when it is missing
+    // the board says less about running backs and ranks them identically.
+    const backfield = await fetchBackfieldSource(league.settings.seasonId).catch((err) => {
+      console.warn("[backfield] usage data unavailable:", err);
+      return undefined;
+    });
+
     const board = buildDraftBoard(
       pool,
       league.settings,
@@ -49,6 +57,7 @@ export async function POST(request: Request) {
         myRoster: ctx.myRoster,
         live: ctx,
         market,
+        backfield,
       },
       Math.min(60, body.limit ?? 25),
     );

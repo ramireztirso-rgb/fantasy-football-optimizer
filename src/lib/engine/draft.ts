@@ -51,6 +51,26 @@ export interface AdpSpreadSource {
 const MARKET_DISAGREEMENT_PICKS = 8;
 const MARKET_DISAGREEMENT_SIGMA = 2;
 
+/**
+ * What a player's backfield looks like, and how durable he has been.
+ *
+ * Structural, like the ADP source, so the engine stays free of any knowledge of
+ * where the data comes from or how it is fetched.
+ */
+export interface BackfieldSource {
+  /** How a back was used last season, when that is known. */
+  roleFor(player: Player):
+    | { role: string; share: number; splitWith: number }
+    | undefined;
+  /** How much time he tends to miss. */
+  durabilityFor(player: Player): { missedPerSeason: number; fragile: boolean } | undefined;
+  /**
+   * The back on your roster this player would replace, when he is the deputy in
+   * a backfield you already own the starter in.
+   */
+  handcuffTargetFor(player: Player, myRoster: Player[]): Player | undefined;
+}
+
 export interface DraftState {
   /** Overall pick number currently on the clock. */
   pickNumber: number;
@@ -70,6 +90,11 @@ export interface DraftState {
    * worse but never fatal: an outside source must not be able to break a draft.
    */
   market?: AdpSpreadSource;
+  /**
+   * Backfield usage and durability. Absent, the board simply says less about
+   * running backs; nothing depends on it.
+   */
+  backfield?: BackfieldSource;
 }
 
 export interface DraftRecommendation {
@@ -518,6 +543,57 @@ function score(proj: Projection, ctx: ScoreContext): DraftRecommendation {
           : `ESPN has him going around pick ${player.averageDraftPosition.toFixed(0)} against ${quote.adp.toFixed(0)} in the wider market across ${quote.timesDrafted} drafts. Your leaguemates see ESPN's number, so expect him to go earlier here than he would anywhere else -- and ask what the market knows that ESPN does not.`,
       );
     }
+  }
+
+  // --- How the backfield is shared, and who inherits it ---
+  //
+  // Notes rather than score, for the same reason the market disagreement is.
+  // A projection already contains the touches a back is expected to get; what
+  // it cannot show is how fragile that arrangement is. Two backs projected for
+  // the same points, one taking eighty-seven percent of his team's carries and
+  // one splitting three ways, are the same number and opposite bets -- and
+  // which bet suits a roster is a judgement about the rest of the roster, not
+  // a coefficient.
+  //
+  // Scoring it would also be unverifiable here. The seat sweep grades rosters
+  // on projected points, which cannot see an injury that has not happened, so
+  // it would rate a handcuff at zero no matter how sound the reasoning.
+  const role = ctx.state.backfield?.roleFor(player);
+  if (role) {
+    if (role.role === "workhorse") {
+      b.note(
+        "backfield_workhorse",
+        "Owns the backfield",
+        `Took ${(role.share * 100).toFixed(0)}% of his team's carries last season. That is about as secure as a running back's workload gets, and it is the part of a projection that usually holds up.`,
+      );
+    } else if (role.role === "committee") {
+      b.note(
+        "backfield_committee",
+        "Shares the backfield",
+        `Took only ${(role.share * 100).toFixed(0)}% of his team's carries last season, split ${role.splitWith} ways. The projection may be right on average and still swing hard either way, because a coaching preference decides it rather than his ability.`,
+      );
+    }
+  }
+
+  const durability = ctx.state.backfield?.durabilityFor(player);
+  if (durability?.fragile) {
+    b.note(
+      "durability",
+      "Misses time",
+      `Has missed about ${durability.missedPerSeason} games a season. Worth planning around rather than avoiding -- it is the reason to spend a late pick on whoever plays when he does not.`,
+    );
+  }
+
+  const handcuffTarget = ctx.state.backfield?.handcuffTargetFor(player, ctx.state.myRoster);
+  if (handcuffTarget) {
+    const targetDurability = ctx.state.backfield?.durabilityFor(handcuffTarget);
+    b.note(
+      "handcuff",
+      `Handcuff for ${handcuffTarget.name}`,
+      targetDurability?.fragile
+        ? `The back behind ${handcuffTarget.name}, who has missed about ${targetDurability.missedPerSeason} games a season. This is not depth -- it is the same workload you already paid for, insured.`
+        : `The back behind ${handcuffTarget.name}, already on your roster. Worth a late pick to protect a starter you are relying on.`,
+    );
   }
 
   if (player.injuryStatus && player.injuryStatus.toUpperCase() !== "ACTIVE") {

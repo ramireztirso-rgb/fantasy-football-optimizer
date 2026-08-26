@@ -408,3 +408,68 @@ describe("draft value regressions", () => {
     }
   });
 });
+
+describe("backfield notes on the board", () => {
+  const ctx = buildLiveDraftContext(status, league.settings, league.teams, pool, 1);
+  const backs = pool.filter((p) => p.position === "RB");
+  const starter = backs[0];
+  const deputy = backs[1];
+
+  const source = {
+    roleFor: (p: (typeof pool)[number]) =>
+      p.id === starter.id ? { role: "workhorse", share: 0.87, splitWith: 2 } : undefined,
+    durabilityFor: (p: (typeof pool)[number]) =>
+      p.id === starter.id ? { missedPerSeason: 4.2, fragile: true } : undefined,
+    // Only a handcuff when the roster already holds the man ahead of him.
+    handcuffTargetFor: (p: (typeof pool)[number], myRoster: (typeof pool)[number][]) =>
+      p.id === deputy.id ? myRoster.find((r) => r.id === starter.id) : undefined,
+  };
+
+  function board(myRoster: (typeof pool)[number][]) {
+    return buildDraftBoard(
+      pool,
+      league.settings,
+      {
+        pickNumber: 20,
+        nextPickNumber: 32,
+        drafted: new Set(myRoster.map((p) => p.id)),
+        myRoster,
+        backfield: source,
+      },
+      40,
+    );
+  }
+
+  const noteFor = (b: ReturnType<typeof board>, id: number, code: string) =>
+    b.recommendations.find((r) => r.player.id === id)?.reasons.find((r) => r.code === code);
+
+  it("says who owns his backfield", () => {
+    const note = noteFor(board([]), starter.id, "backfield_workhorse");
+    expect(note?.detail).toContain("87%");
+    // Information only: a note must not move the ranking.
+    expect(note?.impact).toBe(0);
+  });
+
+  it("flags a back who misses time", () => {
+    expect(noteFor(board([]), starter.id, "durability")?.detail).toContain("4.2");
+  });
+
+  // The point of a handcuff is that you already own the man in front. Before
+  // that he is just another back.
+  it("only calls him a handcuff once you own the starter", () => {
+    expect(noteFor(board([]), deputy.id, "handcuff")).toBeUndefined();
+    const withStarter = noteFor(board([starter]), deputy.id, "handcuff");
+    expect(withStarter?.label).toContain(starter.name);
+    expect(withStarter?.impact).toBe(0);
+  });
+
+  it("works fine with no backfield data at all", () => {
+    const plain = buildDraftBoard(
+      pool,
+      league.settings,
+      { pickNumber: 20, nextPickNumber: 32, drafted: new Set(), myRoster: [] },
+      10,
+    );
+    expect(plain.recommendations.length).toBeGreaterThan(0);
+  });
+});
