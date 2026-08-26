@@ -5,7 +5,9 @@ import { projectPlayer, type Projection } from "./projections";
 import {
   assignTiers,
   computeReplacementLevels,
+  rosterFeasibility,
   rosterNeed,
+  starterDemand,
   type ReplacementLevels,
 } from "./replacement";
 
@@ -73,10 +75,23 @@ const POSITIONS: Position[] = ["QB", "RB", "WR", "TE", "K", "DST"];
  */
 const STREAMABLE = new Set<Position>(["K", "DST"]);
 
-/** Total rounds in the draft: every roster seat gets filled. */
+/**
+ * Score every locked-out player is driven beneath. Far below any real
+ * value-over-replacement so the ordering question never arises.
+ */
+const ROSTER_LOCK_FLOOR = -1000;
+
+/**
+ * Total rounds in the draft.
+ *
+ * Starters plus bench, and deliberately *not* IR: an injured-reserve slot is
+ * filled from the wire once somebody gets hurt, not spent on draft night.
+ * Counting it made the board believe it had one more pick than it did, which
+ * is exactly the pick it needed for a kicker.
+ */
 function draftRounds(settings: LeagueSettings): number {
   const starters = settings.lineupSlots.reduce((sum, s) => sum + s.count, 0);
-  return starters + settings.benchSlots + settings.irSlots || 16;
+  return starters + settings.benchSlots || 16;
 }
 
 export function buildDraftBoard(
@@ -118,6 +133,24 @@ export function buildDraftBoard(
   const rounds = draftRounds(settings);
   const currentRound = Math.floor((state.pickNumber - 1) / (settings.size || 12)) + 1;
 
+  // Picks are a resource like any other, and by the late rounds they are the
+  // binding one. `slack` counts the picks not already owed to an empty
+  // starting slot; when it runs out, "best player available" stops being a
+  // legal answer.
+  const picksRemaining = Math.max(0, rounds - currentRound + 1);
+  const feasibility = rosterFeasibility(state.myRoster, settings, picksRemaining);
+
+  // Per-team starter demand, used to measure how deep past useful a position
+  // already is on this roster.
+  const size = settings.size || 12;
+  const leagueDemand = starterDemand(settings);
+  const perTeamDemand = {} as Record<Position, number>;
+  for (const pos of POSITIONS) perTeamDemand[pos] = leagueDemand[pos] / size;
+
+  const owned = {} as Record<Position, number>;
+  for (const pos of POSITIONS) owned[pos] = 0;
+  for (const p of state.myRoster) owned[p.position] = (owned[p.position] ?? 0) + 1;
+
   const recommendations = projections
     .map((proj) =>
       score(proj, {
@@ -125,6 +158,10 @@ export function buildDraftBoard(
         state,
         replacementLevels,
         need,
+        feasibility,
+        perTeamDemand,
+        owned,
+        picksRemaining,
         tierByPlayer,
         picksUntilNextTurn,
         rounds,
@@ -149,6 +186,10 @@ interface ScoreContext {
   state: DraftState;
   replacementLevels: ReplacementLevels;
   need: Record<Position, number>;
+  feasibility: ReturnType<typeof rosterFeasibility>;
+  perTeamDemand: Record<Position, number>;
+  owned: Record<Position, number>;
+  picksRemaining: number;
   tierByPlayer: Map<number, { tier: number; dropoff: number; remaining: number }>;
   picksUntilNextTurn: number;
   rounds: number;
@@ -186,13 +227,22 @@ function score(proj: Projection, ctx: ScoreContext): DraftRecommendation {
       bonus,
     );
   } else {
-    // Not a penalty for depth exactly -- a penalty for depth you cannot start.
-    const penalty = vorpValue * 0.12;
+    // Not a penalty for depth exactly -- a penalty for depth you cannot start,
+    // and it has to escalate. A flat haircut prices the fourth running back and
+    // the eleventh identically, which is how a board talks itself into eleven
+    // running backs: the position's raw value-over-replacement stays the
+    // highest on the board long after the roster has stopped being able to use
+    // it. The surplus term is what makes each additional one worth less than
+    // the last.
+    const surplus = Math.max(0, ctx.owned[pos] - (ctx.perTeamDemand[pos] ?? 0));
+    const rate = Math.min(0.65, 0.12 + 0.14 * surplus);
     b.add(
       "position_filled",
-      "Position already filled",
-      `Your ${pos} starting slots are already covered, so this player's value only shows up as depth or a trade chip.`,
-      -penalty,
+      surplus >= 1.5 ? `${pos} is your deepest position` : "Position already filled",
+      surplus >= 1.5
+        ? `You already carry ${ctx.owned[pos]} ${pos}${ctx.owned[pos] === 1 ? "" : "s"} against ${(ctx.perTeamDemand[pos] ?? 0).toFixed(1)} starting spots. Another one cannot crack your lineup, so his value here is a fraction of his projection.`
+        : `Your ${pos} starting slots are already covered, so this player's value only shows up as depth or a trade chip.`,
+      -vorpValue * rate,
     );
   }
 
@@ -320,6 +370,34 @@ function score(proj: Projection, ctx: ScoreContext): DraftRecommendation {
         "Draft this last",
         `${pos} is streamed off the wire every week, so drafting one in round ${ctx.currentRound} of ${ctx.rounds} costs you a real player for a spot you can fill for free later. Take one in the final two rounds.`,
         -running * (1 - readiness),
+      );
+    }
+  }
+
+  // Applied dead last, because this is a constraint rather than a preference:
+  // no amount of value elsewhere on the board can outrank it.
+  const { slack, mustFill, outstanding } = ctx.feasibility;
+  if (!mustFill.has(pos) && slack <= 2 && outstanding > 0) {
+    const running = b.total();
+    const empty = [...mustFill].join(", ");
+    if (slack <= 0) {
+      // Every remaining pick is owed to a slot that would otherwise be empty on
+      // week one. Taking anyone else is not a worse pick, it is an illegal
+      // roster, so the player leaves the top of the board entirely. The
+      // surviving thousandth keeps the locked-out players in sensible order
+      // relative to each other rather than collapsing them into a tie.
+      b.add(
+        "roster_lock",
+        `No pick left to spend on ${pos}`,
+        `You have ${ctx.picksRemaining} pick${ctx.picksRemaining === 1 ? "" : "s"} left and ${outstanding} starting slot${outstanding === 1 ? "" : "s"} still empty (${empty}). Every one of those picks is already spoken for, so another ${pos} would leave you unable to field a legal lineup.`,
+        ROSTER_LOCK_FLOOR + running * 0.001 - running,
+      );
+    } else {
+      b.add(
+        "roster_crunch",
+        `${outstanding} starting slot${outstanding === 1 ? "" : "s"} still empty`,
+        `With ${ctx.picksRemaining} pick${ctx.picksRemaining === 1 ? "" : "s"} left you have only ${slack} to spare before ${empty} must be filled. Depth is getting expensive.`,
+        -running * (1 - slack / 3),
       );
     }
   }

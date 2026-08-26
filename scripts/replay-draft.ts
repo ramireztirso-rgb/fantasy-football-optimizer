@@ -31,6 +31,7 @@ const { buildLiveDraftContext, courseCorrection, snakePicksForSlot, teamAtPick }
   "../src/lib/engine/draftLive"
 );
 const { buildDraftBoard } = await import("../src/lib/engine/draft");
+const { mandatoryStarters } = await import("../src/lib/engine/replacement");
 
 type Player = Awaited<ReturnType<typeof fetchDraftPool>>[number];
 type DraftStatus = Awaited<ReturnType<typeof fetchDraftStatus>>;
@@ -232,6 +233,37 @@ async function main() {
     finalCtx.myRoster.length === rounds,
     `my roster should hold ${rounds} players, got ${finalCtx.myRoster.length}`,
   );
+
+  // The point of a draft is not a good roster, it is a *startable* one. A board
+  // that returns fifteen excellent running backs has failed completely, and it
+  // fails silently: every individual pick looks defensible, and nothing goes
+  // wrong until week one when there is nobody to put in the kicker slot.
+  const required = mandatoryStarters(settings);
+  const held = {} as Record<string, number>;
+  for (const p of finalCtx.myRoster) held[p.position] = (held[p.position] ?? 0) + 1;
+
+  for (const [pos, count] of Object.entries(required)) {
+    if (count <= 0) continue;
+    check(
+      (held[pos] ?? 0) >= count,
+      `roster cannot fill its ${pos} slot(s): needs ${count}, drafted ${held[pos] ?? 0}`,
+    );
+  }
+
+  // Flex takes the leftovers, so it is only legal if some eligible position ran
+  // a surplus past its own dedicated slots.
+  const flexCount = settings.lineupSlots.find((s) => s.slot === "FLEX")?.count ?? 0;
+  if (flexCount > 0) {
+    const flexEligible = ["RB", "WR", "TE"] as Array<keyof typeof required>;
+    const spare = flexEligible.reduce(
+      (n, pos) => n + Math.max(0, (held[pos] ?? 0) - (required[pos] ?? 0)),
+      0,
+    );
+    check(
+      spare >= flexCount,
+      `roster cannot fill ${flexCount} FLEX slot(s): no RB/WR/TE left over past the dedicated slots`,
+    );
+  }
 
   console.log(`\nDrafted roster (seat ${mySlot}):`);
   const byPos = new Map<string, string[]>();

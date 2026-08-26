@@ -49,6 +49,63 @@ export function starterDemand(settings: LeagueSettings): Record<Position, number
 }
 
 /**
+ * Starting slots that only one position can fill, per team.
+ *
+ * Distinct from `starterDemand`, which spreads flex across its eligible
+ * positions to answer "how much of this position does the league consume".
+ * The question here is narrower and harder: which slots will sit empty on
+ * week one unless a specific position is drafted. A flex is never one of
+ * those -- it takes whoever is left over -- but a kicker slot is, and no
+ * amount of running back solves it.
+ */
+export function mandatoryStarters(settings: LeagueSettings): Record<Position, number> {
+  const required: Record<Position, number> = { QB: 0, RB: 0, WR: 0, TE: 0, K: 0, DST: 0 };
+
+  for (const { slot, count } of settings.lineupSlots) {
+    const eligible = (SLOT_ELIGIBILITY[slot] ?? []) as Position[];
+    if (eligible.length === 1) required[eligible[0]] += count;
+  }
+  return required;
+}
+
+/**
+ * Starting slots still unfilled, and how many picks that leaves unspoken for.
+ *
+ * `slack` is the number of picks you can still spend on whoever you like.
+ * Once it reaches zero every remaining pick is committed to a slot that would
+ * otherwise be empty, and the board has to stop offering the best player
+ * available -- there is no longer such a thing.
+ */
+export function rosterFeasibility(
+  roster: Player[],
+  settings: LeagueSettings,
+  picksRemaining: number,
+): {
+  unfilled: Record<Position, number>;
+  mustFill: Set<Position>;
+  outstanding: number;
+  slack: number;
+} {
+  const required = mandatoryStarters(settings);
+  const have = {} as Record<Position, number>;
+  for (const pos of POSITIONS) have[pos] = 0;
+  for (const p of roster) have[p.position] = (have[p.position] ?? 0) + 1;
+
+  const unfilled = {} as Record<Position, number>;
+  const mustFill = new Set<Position>();
+  let outstanding = 0;
+
+  for (const pos of POSITIONS) {
+    const gap = Math.max(0, required[pos] - have[pos]);
+    unfilled[pos] = gap;
+    if (gap > 0) mustFill.add(pos);
+    outstanding += gap;
+  }
+
+  return { unfilled, mustFill, outstanding, slack: picksRemaining - outstanding };
+}
+
+/**
  * Replacement level per position: the projected points of the last startable
  * player at that position across the league.
  */
