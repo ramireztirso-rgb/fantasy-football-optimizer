@@ -17,7 +17,8 @@
     "study": "tsx --conditions=react-server scripts/study-breakouts.ts",
     "compare": "tsx --conditions=react-server scripts/compare-projections.ts",
     "workload": "tsx --conditions=react-server scripts/study-workload.ts",
-    "backfields": "tsx --conditions=react-server scripts/backfields.ts"
+    "backfields": "tsx --conditions=react-server scripts/backfields.ts",
+    "qb-effect": "tsx --conditions=react-server scripts/study-qb-effect.ts"
   },
   "dependencies": {
     "next": "^16.3.3",
