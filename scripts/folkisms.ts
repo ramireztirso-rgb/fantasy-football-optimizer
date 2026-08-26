@@ -95,6 +95,7 @@ async function main() {
   findings.push(underdogEffect(games, "RB"));
   findings.push(windKillsPassing(games));
   findings.push(domeBoost(games));
+  findings.push(...touchdownRegression(playerSeasons));
 
   console.log(renderScorecard(findings));
 }
@@ -370,6 +371,127 @@ function domeBoost(games: Game[]): Finding {
     "pts",
     { expect: "increase", practicalThreshold: 1 },
   );
+}
+
+/**
+ * "Touchdowns regress. Fade whoever scored more than his yardage deserved."
+ *
+ * This one needs a model rather than a split, because the claim is about a
+ * quantity nobody records: how many touchdowns a player *should* have scored.
+ * The cheap version is yardage. Touchdowns arrive roughly in proportion to
+ * yards gained, at a rate the whole league shares, so a player's yards imply a
+ * number of scores and the gap between that and reality is his surplus.
+ *
+ * That gap being real is not the interesting part. Every distribution has
+ * tails. The question is whether the surplus is a *skill* -- whether the
+ * players who beat their yardage this year beat it again next year -- and that
+ * is answerable directly, by checking whether the surplus persists at all.
+ *
+ * Two findings come out, because the folk claim bundles two things: that the
+ * surplus is luck, and that acting on it is worth something.
+ */
+function touchdownRegression(playerSeasons: Game[][]): Finding[] {
+  interface Season {
+    gsisId: string;
+    season: number;
+    position: string;
+    surplus: number;
+    pointsPerGame: number;
+  }
+
+  // League-wide scoring rates, measured rather than assumed, so the model moves
+  // with the era instead of pinning 2016 rules onto 2025.
+  let rushYards = 0;
+  let rushTds = 0;
+  let recYards = 0;
+  let recTds = 0;
+  for (const weeks of playerSeasons) {
+    for (const w of weeks) {
+      rushYards += w.rushingYards;
+      rushTds += w.rushingTds;
+      recYards += w.receivingYards;
+      recTds += w.receivingTds;
+    }
+  }
+  const rushRate = rushTds / Math.max(1, rushYards);
+  const recRate = recTds / Math.max(1, recYards);
+
+  const seasons: Season[] = [];
+  for (const weeks of playerSeasons) {
+    const position = weeks[0].position;
+    if (!["RB", "WR", "TE"].includes(position)) continue;
+    const yardsRush = weeks.reduce((n, w) => n + w.rushingYards, 0);
+    const yardsRec = weeks.reduce((n, w) => n + w.receivingYards, 0);
+    if (yardsRush + yardsRec < 400) continue;
+
+    const actual = weeks.reduce((n, w) => n + w.rushingTds + w.receivingTds, 0);
+    const expected = yardsRush * rushRate + yardsRec * recRate;
+    seasons.push({
+      gsisId: weeks[0].gsisId,
+      season: weeks[0].season,
+      position,
+      surplus: actual - expected,
+      pointsPerGame: mean(weeks.map((w) => w.points)),
+    });
+  }
+
+  // --- Does the surplus persist? ---
+  const byKey = new Map(seasons.map((x) => [`${x.season}:${x.gsisId}`, x]));
+  const pairs: Array<[number, number]> = [];
+  const luckyNext: number[] = [];
+  const normalNext: number[] = [];
+  for (const year of seasons) {
+    const next = byKey.get(`${year.season + 1}:${year.gsisId}`);
+    if (!next) continue;
+    pairs.push([year.surplus, next.surplus]);
+    // Matched on what they scored, so the comparison is between two players who
+    // looked equally good, one of whom got there on touchdowns.
+    if (year.pointsPerGame < 8 || year.pointsPerGame > 18) continue;
+    const change = next.pointsPerGame - year.pointsPerGame;
+    if (year.surplus >= 3) luckyNext.push(change);
+    else if (Math.abs(year.surplus) < 1) normalNext.push(change);
+  }
+
+  const r = correlation(pairs);
+  const persistence: Finding = {
+    claim: "Beating your yardage on TDs is a repeatable skill",
+    verdict: Math.abs(r) < 0.15 ? "REJECTED" : r > 0 ? "CONFIRMED" : "REJECTED",
+    effect: Math.round(r * 100) / 100,
+    effectUnit: "correlation",
+    sigmas: Math.abs(r) * Math.sqrt(Math.max(1, pairs.length - 2)) / Math.sqrt(Math.max(0.0001, 1 - r * r)),
+    sample: pairs.length,
+    detail:
+      `A player's touchdown surplus carries ${r.toFixed(2)} into the next season -- ` +
+      `${(r * r * 100).toFixed(0)}% of it. ${
+        Math.abs(r) < 0.15
+          ? "Which is to say it is luck, and the players who beat their yardage this year are not the ones who beat it next year."
+          : "Some of it is a real property of the player."
+      }`,
+  };
+
+  const consequence = judge(
+    "Fading last year's TD surplus is worth doing",
+    { label: "players whose TDs matched their yards", values: normalNext },
+    { label: "players with 3+ TDs of surplus", values: luckyNext },
+    "pts a game next season",
+    { expect: "decrease", practicalThreshold: 1 },
+  );
+
+  return [persistence, consequence];
+}
+
+function correlation(pairs: Array<[number, number]>): number {
+  const mx = mean(pairs.map((p) => p[0]));
+  const my = mean(pairs.map((p) => p[1]));
+  let num = 0;
+  let dx = 0;
+  let dy = 0;
+  for (const [x, y] of pairs) {
+    num += (x - mx) * (y - my);
+    dx += (x - mx) ** 2;
+    dy += (y - my) ** 2;
+  }
+  return dx > 0 && dy > 0 ? num / Math.sqrt(dx * dy) : 0;
 }
 
 function readFlag(name: string): string | undefined {
