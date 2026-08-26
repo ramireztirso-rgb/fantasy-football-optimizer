@@ -27,6 +27,7 @@ const { fetchSeasonStats } = await import("../src/lib/sources/nflverse");
 const { componentProjection, positionalBaselines, compareToForecast } = await import(
   "../src/lib/engine/componentProjection"
 );
+const { detectTeamChange } = await import("../src/lib/engine/teamChange");
 
 type SeasonStatLine = Awaited<ReturnType<typeof fetchSeasonStats>>[number];
 
@@ -38,6 +39,8 @@ interface Row {
   own: number;
   relativeGap: number;
   games: number;
+  /** Where he played last, when that is somewhere else. */
+  movedFrom: string | null;
 }
 
 const args = process.argv.slice(2);
@@ -125,8 +128,10 @@ async function main() {
     // describing the baseline, not the player.
     if (!own || own.regression > 0.5) continue;
 
+    const move = detectTeamChange(player, lines);
     const cmp = compareToForecast(player.seasonProjectedPoints, own, player.name);
     rows.push({
+      movedFrom: move?.changed ? move.from : null,
       name: player.name,
       position: player.position,
       adp: player.averageDraftPosition,
@@ -148,6 +153,13 @@ async function main() {
   print("ESPN is highest above their own production", sorted.slice(0, show));
   print("ESPN is furthest below their own production", sorted.slice(-show).reverse());
 
+  const moved = rows.filter((r) => r.movedFrom);
+  console.log(
+    `${moved.length} of ${rows.length} compared players changed teams. Their own-production\n` +
+      `figure is the least trustworthy number in this table -- it is extrapolating targets\n` +
+      `that belonged to a different offence.\n`,
+  );
+
   const agree = rows.filter((r) => Math.abs(r.relativeGap) < 0.15).length;
   console.log(
     `\n${agree} of ${rows.length} (${((agree / rows.length) * 100).toFixed(0)}%) agree within 15%. ` +
@@ -164,7 +176,8 @@ function print(title: string, rows: Row[]) {
         `${String(Math.round(r.adp)).padStart(4)} ` +
         `${String(Math.round(r.forecast)).padStart(5)} ` +
         `${String(Math.round(r.own)).padStart(5)}  ` +
-        `${(r.relativeGap >= 0 ? "+" : "") + (r.relativeGap * 100).toFixed(0)}%`,
+        `${((r.relativeGap >= 0 ? "+" : "") + (r.relativeGap * 100).toFixed(0) + "%").padStart(5)}` +
+        `${r.movedFrom ? `   moved from ${r.movedFrom}` : ""}`,
     );
   }
   console.log("");

@@ -20,6 +20,11 @@ export interface SeasonStatLine {
   name: string;
   position: string;
   season: number;
+  /**
+   * Team as of the player's last game that season. Mid-season trades mean a
+   * stat line can span two, and where he *ended up* is what predicts next year.
+   */
+  team: string;
   games: number;
   receptions: number;
   targets: number;
@@ -66,6 +71,7 @@ export async function fetchSeasonStats(season: number): Promise<SeasonStatLine[]
         name: row.player_display_name || row.player_name || "",
         position: row.position || "",
         season,
+        team: "",
         games: 0,
         receptions: 0,
         targets: 0,
@@ -84,6 +90,8 @@ export async function fetchSeasonStats(season: number): Promise<SeasonStatLine[]
       totals.set(gsisId, line);
     }
 
+    // Rows arrive in week order, so the last one seen is the latest team.
+    if (row.team) line.team = row.team;
     line.games += 1;
     line.receptions += num(row.receptions) ?? 0;
     line.targets += num(row.targets) ?? 0;
