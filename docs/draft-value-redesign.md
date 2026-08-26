@@ -128,3 +128,63 @@ Worth recording so it doesn't happen a fourth.
 
 The pattern: all three were attempts to fix the *input* to a formula whose
 *shape* was the problem. Percentages of a distorted number stay distorted.
+
+---
+
+## Update after building a prototype: the design above is incomplete
+
+Built it, ran it, and it found a hole in its own reasoning. Recording that here
+rather than in a commit nobody will find.
+
+At the first pick it behaves exactly as hoped — a healthy mix of positions:
+
+```
+RB  Jahmyr Gibbs        174.3
+WR  Puka Nacua          161.7
+RB  Bijan Robinson      156.3
+RB  Jonathan Taylor     139.7
+WR  Ja'Marr Chase       138.6
+```
+
+At pick 48 it wants to draft a **defence in the fourth round**:
+
+```
+RB  Quinshon Judkins     51.7
+DST Broncos D/ST         36.6
+DST Texans D/ST          36.4
+QB  Jalen Hurts          35.7
+```
+
+It isn't wrong on its own terms. Your defence slot is empty, and a top defence
+really does add about 36 points over a freely available one. The mistake is in
+what it compares against.
+
+**"A freely available player right now" is the wrong alternative.** Nobody
+filling a defence slot in round four is choosing between a good defence and a
+terrible one. They're choosing between a good defence *now* and an almost-as-good
+defence *in round fifteen* — and the second one costs them nothing, because the
+good defences are still there in round fifteen.
+
+So the missing term is time. The value of taking a player now is:
+
+> what he adds to my lineup **minus** what I'd add by filling that slot with my
+> next pick instead
+
+For a defence, those two are nearly identical, so the difference is close to
+zero and it correctly drops down the board. For a running back in a run, the
+player available at your next pick is much worse, so the difference is large and
+he correctly rises.
+
+This is the same idea the board already has as "will he still be there at my
+next turn," which is currently bolted on as a separate adjustment. Under this
+design it isn't a separate adjustment at all — it's the definition of value.
+
+**What to do next:** rework `marginalValue` to take the pool and the next pick
+number, and compare against the best replacement it can expect to still get for
+that slot, rather than against a freely available player. The existing survival
+probability already estimates who'll still be there.
+
+The prototype is committed and tested but **is not wired into the board**, and
+should not be until this term exists. As it stands it would draft a defence in
+the fourth round, which fails the acceptance test more obviously than the
+problem it was built to solve.
