@@ -91,3 +91,40 @@ export async function fetchTeamSeasons(): Promise<TeamSeasonRecord[]> {
   }
   return out;
 }
+
+/**
+ * Who is coaching each team in a season that has not been played yet.
+ *
+ * Scheduled games carry their coaching assignments before anybody kicks off,
+ * which is what makes the coaching-change finding usable for a draft rather
+ * than only for a post-mortem. Kept separate from `fetchTeamSeasons` because
+ * that one is built around results and a future season has none.
+ */
+export async function fetchCoaches(season: number): Promise<Map<string, string>> {
+  const { text } = await fetchTextCached(SOURCE_URL, "games.csv", {
+    ttlMs: 24 * 60 * 60 * 1000,
+    timeoutSeconds: 90,
+  });
+
+  const counts = new Map<string, Map<string, number>>();
+  const bump = (team: string, coach: string) => {
+    if (!team || !coach) return;
+    const inner = counts.get(team) ?? new Map<string, number>();
+    inner.set(coach, (inner.get(coach) ?? 0) + 1);
+    counts.set(team, inner);
+  };
+
+  for (const row of parseCsv(text)) {
+    if (num(row.season) !== season) continue;
+    if (row.game_type && row.game_type !== "REG") continue;
+    bump(row.home_team ?? "", row.home_coach ?? "");
+    bump(row.away_team ?? "", row.away_coach ?? "");
+  }
+
+  const out = new Map<string, string>();
+  for (const [team, inner] of counts) {
+    const [coach] = [...inner.entries()].sort((a, b) => b[1] - a[1])[0] ?? [""];
+    if (coach) out.set(team, coach);
+  }
+  return out;
+}

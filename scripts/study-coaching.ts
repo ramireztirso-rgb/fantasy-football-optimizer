@@ -26,7 +26,9 @@ import { readFileSync } from "node:fs";
 loadEnvFile(".env.local");
 loadEnvFile(".env");
 
-const { fetchTeamSeasons } = await import("../src/lib/sources/schedules");
+const { fetchTeamSeasons, fetchCoaches } = await import("../src/lib/sources/schedules");
+const { credentialsFromEnv } = await import("../src/lib/espn/client");
+const { fetchLeague } = await import("../src/lib/espn/league");
 
 const args = process.argv.slice(2);
 const firstSeason = Number(readFlag("--from") ?? 2010);
@@ -114,6 +116,70 @@ async function main() {
     `\nRead the difference column. If a new coach were doing the work it would be\n` +
       `consistently positive. Near zero means both groups are only being pulled back\n` +
       `toward the middle, and the new coach is being credited for the average.`,
+  );
+
+  await applyToUpcomingSeason(seasons);
+}
+
+/**
+ * Which teams the finding actually applies to this year.
+ *
+ * A result nobody can act on is a result nobody will use, and the whole point
+ * of separating broken offences from mediocre ones is that they point opposite
+ * ways.
+ */
+async function applyToUpcomingSeason(seasons: Awaited<ReturnType<typeof fetchTeamSeasons>>) {
+  const league = await fetchLeague(credentialsFromEnv());
+  const upcoming = league.settings.seasonId;
+  const previous = upcoming - 1;
+
+  const lastYear = new Map(
+    seasons.filter((s) => s.season === previous).map((s) => [s.team, s]),
+  );
+  const coachesNow = await fetchCoaches(upcoming);
+  if (!coachesNow.size) {
+    console.log(`\nNo ${upcoming} coaching assignments published yet.`);
+    return;
+  }
+
+  interface Row {
+    team: string;
+    from: string;
+    to: string;
+    scored: number;
+  }
+  const changes: Row[] = [];
+  for (const [team, coach] of coachesNow) {
+    const before = lastYear.get(team);
+    if (!before || !before.coach || before.coach === coach) continue;
+    changes.push({ team, from: before.coach, to: coach, scored: before.pointsFor / before.games });
+  }
+  changes.sort((a, b) => a.scored - b.scored);
+
+  console.log(`\n${"=".repeat(74)}`);
+  console.log(`Teams with a new head coach for ${upcoming}, and what the above implies:\n`);
+  if (!changes.length) {
+    console.log(`  None. Every team kept its head coach.`);
+    return;
+  }
+
+  for (const row of changes) {
+    const verdict =
+      row.scored < 18
+        ? `broken offence -- the one case where a change helps, worth about +3.7 a game`
+        : row.scored < 24
+          ? `merely mediocre -- a change costs about 1.5 a game here, so fade slightly`
+          : `already good -- the evidence is too thin to call either way`;
+    console.log(
+      `  ${row.team.padEnd(4)} ${row.scored.toFixed(1).padStart(5)} pts/g in ${previous}  ` +
+        `${row.from} -> ${row.to}`,
+    );
+    console.log(`       ${verdict}`);
+  }
+
+  console.log(
+    `\n  Note the sample: this rests on 29 broken offences that changed coach since\n` +
+      `  2010, against 28 that did not. Real, and not many.`,
   );
 }
 
