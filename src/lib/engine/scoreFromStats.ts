@@ -40,8 +40,14 @@ export interface ScoredStatLine {
   breakdown: Array<{ statId: number; units: number; points: number }>;
 }
 
+/**
+ * A line to score. Weekly and season lines both qualify -- only the counting
+ * stats matter, and `games` exists solely to turn a total into a rate.
+ */
+export type ScorableLine = Omit<SeasonStatLine, "games"> & { games?: number };
+
 export function scoreStatLine(
-  line: SeasonStatLine,
+  line: ScorableLine,
   settings: LeagueSettings,
   position: Position,
 ): ScoredStatLine {
@@ -66,9 +72,10 @@ export function scoreStatLine(
   }
 
   breakdown.sort((a, b) => Math.abs(b.points) - Math.abs(a.points));
+  const games = line.games ?? 1;
   return {
     points: round2(points),
-    pointsPerGame: line.games > 0 ? round2(points / line.games) : 0,
+    pointsPerGame: games > 0 ? round2(points / games) : 0,
     breakdown,
   };
 }

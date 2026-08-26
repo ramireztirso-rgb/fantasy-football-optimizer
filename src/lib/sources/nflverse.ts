@@ -115,3 +115,75 @@ export async function fetchSeasonStats(season: number): Promise<SeasonStatLine[]
 
   return [...totals.values()];
 }
+
+/** One player's line for one game, before anyone's scoring is applied. */
+export interface WeeklyStatLine {
+  gsisId: string;
+  name: string;
+  position: string;
+  season: number;
+  week: number;
+  team: string;
+  opponent: string;
+  carries: number;
+  rushingYards: number;
+  rushingTds: number;
+  rushingFirstDowns: number;
+  receptions: number;
+  targets: number;
+  receivingYards: number;
+  receivingTds: number;
+  receivingFirstDowns: number;
+  passingYards: number;
+  passingTds: number;
+  passingFirstDowns: number;
+  interceptions: number;
+  fumblesLost: number;
+}
+
+/**
+ * Week-by-week lines, which is what almost every question about consistency
+ * needs.
+ *
+ * Season totals hide the thing being asked about. "Does a workhorse have a
+ * higher floor" is a question about the shape of a distribution, and a season
+ * total is one number with the shape averaged out of it.
+ */
+export async function fetchWeeklyStats(season: number): Promise<WeeklyStatLine[]> {
+  const { text } = await fetchTextCached(
+    `${RELEASE}/stats_player_week_${season}.csv`,
+    `stats_player_week_${season}.csv`,
+    { ttlMs: 24 * 60 * 60 * 1000, timeoutSeconds: 120 },
+  );
+
+  const out: WeeklyStatLine[] = [];
+  for (const row of parseCsv(text)) {
+    if (row.season_type && row.season_type !== "REG") continue;
+    const week = num(row.week);
+    if (!row.player_id || week === undefined) continue;
+    out.push({
+      gsisId: row.player_id,
+      name: row.player_display_name || row.player_name || "",
+      position: row.position || "",
+      season,
+      week,
+      team: row.team ?? "",
+      opponent: row.opponent_team ?? "",
+      carries: num(row.carries) ?? 0,
+      rushingYards: num(row.rushing_yards) ?? 0,
+      rushingTds: num(row.rushing_tds) ?? 0,
+      rushingFirstDowns: num(row.rushing_first_downs) ?? 0,
+      receptions: num(row.receptions) ?? 0,
+      targets: num(row.targets) ?? 0,
+      receivingYards: num(row.receiving_yards) ?? 0,
+      receivingTds: num(row.receiving_tds) ?? 0,
+      receivingFirstDowns: num(row.receiving_first_downs) ?? 0,
+      passingYards: num(row.passing_yards) ?? 0,
+      passingTds: num(row.passing_tds) ?? 0,
+      passingFirstDowns: num(row.passing_first_downs) ?? 0,
+      interceptions: num(row.passing_interceptions) ?? num(row.interceptions) ?? 0,
+      fumblesLost: (num(row.rushing_fumbles_lost) ?? 0) + (num(row.receiving_fumbles_lost) ?? 0),
+    });
+  }
+  return out;
+}

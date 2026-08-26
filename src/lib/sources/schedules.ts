@@ -158,3 +158,82 @@ export async function fetchScheduledGames(season: number): Promise<ScheduledGame
   }
   return out;
 }
+
+/**
+ * Everything about a game that is not the players in it.
+ *
+ * The betting line is the single most useful column here. It is the market's
+ * forecast of the game, assembled by people with money at stake, and it
+ * encodes game script -- who will lead, who will be throwing to catch up --
+ * more reliably than anything derivable after the fact.
+ */
+export interface GameContext {
+  season: number;
+  week: number;
+  home: string;
+  away: string;
+  /** Points the home team is favoured by; negative means they are underdogs. */
+  homeSpread: number | null;
+  total: number | null;
+  roof: string;
+  surface: string;
+  temperature: number | null;
+  wind: number | null;
+  weekday: string;
+  /** Kickoff in 24-hour local time, e.g. "20:20". */
+  kickoff: string;
+  divisional: boolean;
+}
+
+/** Game context keyed by `week:team`, so a player's row can find its game. */
+export async function fetchGameContext(season: number): Promise<Map<string, GameContext>> {
+  const { text } = await fetchTextCached(SOURCE_URL, "games.csv", {
+    ttlMs: 24 * 60 * 60 * 1000,
+    timeoutSeconds: 90,
+  });
+
+  const out = new Map<string, GameContext>();
+  for (const row of parseCsv(text)) {
+    if (num(row.season) !== season) continue;
+    if (row.game_type && row.game_type !== "REG") continue;
+    const week = num(row.week);
+    if (week === undefined || !row.home_team || !row.away_team) continue;
+
+    const context: GameContext = {
+      season,
+      week,
+      home: row.home_team,
+      away: row.away_team,
+      homeSpread: num(row.spread_line) ?? null,
+      total: num(row.total_line) ?? null,
+      roof: row.roof ?? "",
+      surface: row.surface ?? "",
+      temperature: num(row.temp) ?? null,
+      wind: num(row.wind) ?? null,
+      weekday: row.weekday ?? "",
+      kickoff: row.gametime ?? "",
+      divisional: row.div_game === "1",
+    };
+    out.set(`${week}:${row.home_team}`, context);
+    out.set(`${week}:${row.away_team}`, context);
+  }
+  return out;
+}
+
+/**
+ * The spread from one team's point of view, positive when they are favoured.
+ *
+ * Worth a helper because getting the sign backwards inverts every conclusion
+ * built on it, silently and plausibly.
+ */
+export function spreadFor(team: string, context: GameContext): number | null {
+  if (context.homeSpread === null) return null;
+  return team === context.home ? context.homeSpread : -context.homeSpread;
+}
+
+/** A team's own expected points: half the total, adjusted by the spread. */
+export function impliedTotalFor(team: string, context: GameContext): number | null {
+  const spread = spreadFor(team, context);
+  if (spread === null || context.total === null) return null;
+  return context.total / 2 + spread / 2;
+}
