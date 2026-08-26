@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getDraftPoolData, getDraftStatus, getLeague, toErrorResponse } from "@/lib/data";
 import { buildLiveDraftContext, courseCorrection } from "@/lib/engine/draftLive";
 import { buildDraftBoard } from "@/lib/engine/draft";
+import { fetchAdpMarket } from "@/lib/sources/adp";
 
 export const dynamic = "force-dynamic";
 
@@ -28,6 +29,10 @@ export async function POST(request: Request) {
 
     const ctx = buildLiveDraftContext(status, league.settings, league.teams, pool, league.myTeamId);
 
+    // Measured draft-slot spreads. This is the path that runs during an actual
+    // draft, so a failure here must cost accuracy and nothing else.
+    const market = await fetchAdpMarket(league.settings).catch(() => undefined);
+
     const board = buildDraftBoard(
       pool,
       league.settings,
@@ -37,6 +42,7 @@ export async function POST(request: Request) {
         drafted: ctx.draftedIds,
         myRoster: ctx.myRoster,
         live: ctx,
+        market,
       },
       Math.min(60, body.limit ?? 25),
     );

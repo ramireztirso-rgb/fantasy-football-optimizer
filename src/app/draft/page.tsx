@@ -82,6 +82,11 @@ export default function DraftPage() {
   if (loading || !data) return <Loading what="the draft board" />;
 
   const { draft, board, settings, correction } = data;
+
+  // Bands reorder players by fit, so each row has to carry the board's own
+  // ranking with it -- otherwise it is not visible that you are being advised
+  // to pass on the top-scoring player, which is the whole point of a band.
+  const rankOf = new Map(board.recommendations.map((rec, i) => [rec.player.id, i + 1]));
   const onTheClock = draft.myNextPick !== null && draft.picksUntilMyTurn === 0;
 
   return (
@@ -178,35 +183,57 @@ export default function DraftPage() {
       )}
 
       <div className="grid gap-6 lg:grid-cols-[3fr_2fr]">
-        <Card title="Best picks available">
-          <ul className="space-y-6">
-            {board.recommendations.map((rec, i) => (
-              <li key={rec.player.id} className="border-b border-pitch-800 pb-6 last:border-0 last:pb-0">
-                <div className="flex flex-wrap items-baseline gap-2">
-                  <span className="tabular w-6 text-chalk-500">{i + 1}.</span>
-                  <span className="text-base font-medium">{rec.player.name}</span>
-                  <span className="text-chalk-500">
-                    {rec.player.position} · {rec.player.proTeam}
-                  </span>
-                  <Pill tone="neutral">Tier {rec.tier}</Pill>
-                  <Pill
-                    tone={
-                      rec.survivalProbability < 0.25
-                        ? "bad"
-                        : rec.survivalProbability > 0.6
-                          ? "good"
-                          : "warn"
-                    }
-                  >
-                    {(rec.survivalProbability * 100).toFixed(0)}% lasts
-                    {rec.survivalBasis === "league-needs" ? " (league)" : " (ADP)"}
-                  </Pill>
-                  <span className="tabular ml-auto text-lg font-semibold">{rec.score.toFixed(0)}</span>
+        <Card
+          title="Best picks available"
+          subtitle={
+            board.tiers.length > 0
+              ? "Grouped into bands of equivalent value. Inside a band the choice is not about who is better — it is about who fits this roster."
+              : undefined
+          }
+        >
+          {board.tiers.length > 0 ? (
+            <div className="space-y-8">
+              {board.tiers.map((band) => (
+                <div key={band.band}>
+                  <div className="mb-3 flex flex-wrap items-baseline gap-2 border-b border-pitch-800 pb-2">
+                    <Pill tone="neutral">Band {band.band}</Pill>
+                    <span className="text-sm text-chalk-500">
+                      {band.players.length === 1
+                        ? "on its own"
+                        : `${band.players.length} players worth about the same`}
+                      {" · "}
+                      {band.valueLow.toFixed(0)}–{band.valueHigh.toFixed(0)} over replacement
+                    </span>
+                    {band.dropoff > 0 && (
+                      <span className="ml-auto text-sm text-chalk-500">
+                        then a {band.dropoff.toFixed(0)}-point drop
+                      </span>
+                    )}
+                  </div>
+                  <ul className="space-y-6">
+                    {band.players.map((rec) => (
+                      <RecommendationRow
+                        key={rec.player.id}
+                        rec={rec}
+                        rank={rankOf.get(rec.player.id) ?? 0}
+                      />
+                    ))}
+                  </ul>
+                  {band.fitNote && (
+                    <p className="mt-3 rounded-lg border border-pitch-700 bg-pitch-800/40 px-3 py-2 text-sm text-chalk-300">
+                      {band.fitNote}
+                    </p>
+                  )}
                 </div>
-                <Reasons reasons={rec.reasons} />
-              </li>
-            ))}
-          </ul>
+              ))}
+            </div>
+          ) : (
+            <ul className="space-y-6">
+              {board.recommendations.map((rec, i) => (
+                <RecommendationRow key={rec.player.id} rec={rec} rank={i + 1} />
+              ))}
+            </ul>
+          )}
         </Card>
 
         <div className="space-y-6">
@@ -326,5 +353,37 @@ export default function DraftPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+function RecommendationRow({
+  rec,
+  rank,
+}: {
+  rec: DraftBoard["recommendations"][number];
+  rank: number;
+}) {
+  return (
+    <li className="border-b border-pitch-800 pb-6 last:border-0 last:pb-0">
+      <div className="flex flex-wrap items-baseline gap-2">
+        <span className="tabular w-6 text-chalk-500">{rank}.</span>
+        <span className="text-base font-medium">{rec.player.name}</span>
+        <span className="text-chalk-500">
+          {rec.player.position} · {rec.player.proTeam}
+        </span>
+        <Pill tone="neutral">Tier {rec.tier}</Pill>
+        {rec.player.byeWeek > 0 && <Pill tone="neutral">Bye {rec.player.byeWeek}</Pill>}
+        <Pill
+          tone={
+            rec.survivalProbability < 0.25 ? "bad" : rec.survivalProbability > 0.6 ? "good" : "warn"
+          }
+        >
+          {(rec.survivalProbability * 100).toFixed(0)}% lasts
+          {rec.survivalBasis === "league-needs" ? " (league)" : " (ADP)"}
+        </Pill>
+        <span className="tabular ml-auto text-lg font-semibold">{rec.score.toFixed(0)}</span>
+      </div>
+      <Reasons reasons={rec.reasons} />
+    </li>
   );
 }
