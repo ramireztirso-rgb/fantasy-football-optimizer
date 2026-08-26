@@ -318,20 +318,24 @@ describe("survival with a measured spread", () => {
 });
 
 describe("value bands", () => {
-  const rec = (id: number, name: string, vorp: number, score: number) =>
+  // `projected` defaults to tracking the score, which is the ordinary case:
+  // the player worth most to the roster is usually also the best player. The
+  // interesting case is when they come apart.
+  const rec = (id: number, name: string, score: number, projected = score) =>
     ({
       player: { id, name, position: "RB" },
-      vorp,
+      vorp: score,
       score,
-      reasons: [{ code: "roster_need", label: "Fills a need", detail: "", impact: 5, direction: "positive" }],
+      projection: { points: projected },
+      reasons: [],
     }) as unknown as Parameters<typeof bandByValue>[0][number];
 
   it("groups players of comparable value and splits at real gaps", () => {
     const bands = bandByValue([
-      rec(1, "Elite", 140, 140),
-      rec(2, "Good A", 100, 100),
-      rec(3, "Good B", 96, 99),
-      rec(4, "Fringe", 40, 40),
+      rec(1, "Elite", 140),
+      rec(2, "Good A", 100),
+      rec(3, "Good B", 99),
+      rec(4, "Fringe", 40),
     ]);
     expect(bands.map((b) => b.players.length)).toEqual([1, 2, 1]);
     expect(bands[0].players[0].player.name).toBe("Elite");
@@ -342,7 +346,7 @@ describe("value bands", () => {
   // elite to replacement level in small steps, so a "tier" spans everything
   // and means nothing.
   it("does not let a shallow slope chain into one enormous band", () => {
-    const sliding = Array.from({ length: 30 }, (_, i) => rec(i + 1, `P${i}`, 150 - i * 3, 150 - i * 3));
+    const sliding = Array.from({ length: 30 }, (_, i) => rec(i + 1, `P${i}`, 150 - i * 3));
     const bands = bandByValue(sliding);
     expect(bands.length).toBeGreaterThan(1);
     for (const band of bands) {
@@ -350,22 +354,25 @@ describe("value bands", () => {
     }
   });
 
-  // The point of banding: inside a band, value is settled and fit decides.
-  it("orders a band by fit and says so when that reorders it", () => {
+  // The point of banding, now that the score *is* the fit: when the pick is not
+  // the best-projected player in the group, say so, because that is the moment
+  // the board looks like it has made a mistake and has not.
+  it("flags a band where the best pick is not the best player", () => {
     const bands = bandByValue([
-      rec(1, "More Valuable", 100, 90),
-      rec(2, "Better Fit", 97, 110),
+      // Worth more to this roster despite projecting 30 points lower.
+      rec(1, "Better For You", 100, 200),
+      rec(2, "Bigger Name", 97, 230),
       rec(3, "Filler", 40, 40),
     ]);
-    expect(bands[0].players[0].player.name).toBe("Better Fit");
-    expect(bands[0].fitNote).toContain("Better Fit");
-    expect(bands[0].fitNote).toContain("fits this roster better");
+    expect(bands[0].players[0].player.name).toBe("Better For You");
+    expect(bands[0].fitNote).toContain("Bigger Name");
+    expect(bands[0].fitNote).toContain("30 more points");
   });
 
-  it("stays quiet when the most valuable player is also the best fit", () => {
+  it("stays quiet when the best pick is also the best player", () => {
     const bands = bandByValue([
-      rec(1, "Best", 100, 120),
-      rec(2, "Second", 97, 100),
+      rec(1, "Best", 100, 230),
+      rec(2, "Second", 97, 200),
       rec(3, "Filler", 40, 40),
     ]);
     expect(bands[0].fitNote).toBeNull();

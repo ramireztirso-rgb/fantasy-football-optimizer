@@ -10,6 +10,7 @@ import {
   starterDemand,
   type ReplacementLevels,
 } from "./replacement";
+import { levelsAvailableLater, marginalValue } from "./marginalValue";
 
 export { rosterNeed };
 
@@ -97,11 +98,12 @@ export interface DraftRecommendation {
  * actually asks: of everyone in front of me, who is genuinely equivalent, and
  * given that, who fits my roster best?
  *
- * Bands are cut on raw value over replacement -- deliberately not on the final
- * score, which already contains the roster adjustments. Banding on the score
- * would group players by how well they fit and then rank them by how well they
- * fit, which is circular and would hide the very thing worth showing: that
- * three players are equal in value and one of them is better for *you*.
+ * Bands are cut on the score, which is what a player is worth to this roster.
+ * That is a change: they used to be cut on value over replacement and then
+ * ordered by fit, because value and fit were two separate numbers. They are not
+ * any more. The score is the points a player adds to your lineup, so it already
+ * is the fit, and grouping by anything else would be grouping by a number the
+ * board no longer ranks on.
  */
 export interface ValueBand {
   /** 1 is the most valuable band on the board. */
@@ -182,7 +184,19 @@ export function buildDraftBoard(
   };
 
   const projections = pool.filter((p) => !state.drafted.has(p.id)).map(project);
-  const replacementLevels = computeReplacementLevels(projections, settings);
+
+  // Two different baselines, doing two different jobs.
+  //
+  // `replacementLevels` is what a freely available player gives you, measured
+  // against the whole pool so it does not slide around as the draft empties. It
+  // is what the reported value-over-replacement means.
+  //
+  // `waitLevels` is the interesting one: the best player you can still expect
+  // to get at each position at your *next* turn. That is the real alternative
+  // to taking somebody now, and pricing against it is what stops the board
+  // spending a fourth-round pick on a defence that will still be sitting there
+  // in the fifteenth.
+  const replacementLevels = computeReplacementLevels(pool.map(project), settings);
   const need = rosterNeed(state.myRoster, settings);
 
   // Tiers are computed per position, since a cliff is a positional idea.
@@ -201,6 +215,15 @@ export function buildDraftBoard(
     (pointsById.get(p.id) ?? p.seasonProjectedPoints) - (replacementLevels[p.position] ?? 0);
   const teamStates = new Map((state.live?.teams ?? []).map((t) => [t.teamId, t]));
   const availablePlayers = projections.map((p) => p.player);
+
+  const survives = (p: Player) =>
+    survivalProbability(p, state.pickNumber, state.nextPickNumber, state.market?.stdevFor(p));
+  const waitLevels =
+    state.nextPickNumber > state.pickNumber
+      ? levelsAvailableLater(projections, replacementLevels, survives)
+      : replacementLevels;
+
+  const rosterWithPoints = state.myRoster.map((p) => ({ player: p, points: project(p).points }));
 
   const rounds = draftRounds(settings);
   const currentRound = Math.floor((state.pickNumber - 1) / (settings.size || 12)) + 1;
@@ -223,9 +246,46 @@ export function buildDraftBoard(
   for (const pos of POSITIONS) owned[pos] = 0;
   for (const p of state.myRoster) owned[p.position] = (owned[p.position] ?? 0) + 1;
 
+  // Working out a player's marginal value means solving a small lineup problem
+  // twice, which is cheap individually and not cheap five hundred times a pick.
+  // Only players who could plausibly be recommended get one: a shortlist by raw
+  // value over replacement, several times longer than the board being returned,
+  // so nobody who could have made it is cut. Everyone else keeps a value of
+  // zero, which is very nearly true of them anyway.
+  const overReplacement = (proj: Projection) =>
+    proj.points - (replacementLevels[proj.player.position] ?? 0);
+  const byValue = [...projections].sort((a, b) => overReplacement(b) - overReplacement(a));
+
+  const shortlist = new Set(byValue.slice(0, Math.max(90, limit * 3)).map((p) => p.player.id));
+
+  // Plus the best few at every position, without which the shortlist quietly
+  // decides the answer. Kickers and defences sit near the bottom on value over
+  // replacement always, including in the final rounds when an empty slot makes
+  // them the most valuable pick on the board -- shortlisting on the old measure
+  // cut them before the new one could ever see them, and they disappeared from
+  // the end of the draft entirely.
+  for (const pos of POSITIONS) {
+    for (const proj of byValue.filter((p) => p.player.position === pos).slice(0, 8)) {
+      shortlist.add(proj.player.id);
+    }
+  }
+
+  const marginalCtx = {
+    settings,
+    levels: waitLevels,
+    roster: rosterWithPoints,
+    picksRemaining,
+  };
+  const marginalById = new Map<number, number>();
+  for (const proj of projections) {
+    if (!shortlist.has(proj.player.id)) continue;
+    marginalById.set(proj.player.id, marginalValue(proj.player, proj.points, marginalCtx));
+  }
+
   const recommendations = projections
     .map((proj) =>
       score(proj, {
+        marginal: marginalById.get(proj.player.id) ?? 0,
         settings,
         state,
         replacementLevels,
@@ -258,6 +318,8 @@ interface ScoreContext {
   settings: LeagueSettings;
   state: DraftState;
   replacementLevels: ReplacementLevels;
+  /** Points this player adds to the best lineup the roster could field. */
+  marginal: number;
   need: Record<Position, number>;
   feasibility: ReturnType<typeof rosterFeasibility>;
   perTeamDemand: Record<Position, number>;
@@ -281,81 +343,41 @@ function score(proj: Projection, ctx: ScoreContext): DraftRecommendation {
   const vorpValue = round2(proj.points - replacement);
 
   /**
-   * Magnitude to scale proportional adjustments by.
+   * What the player is actually worth: the points he adds to the best starting
+   * lineup this roster could field, priced against the best player you could
+   * still expect to get for that slot at your next turn.
    *
-   * Every factor below is a percentage *of the player's value*, and a player
-   * below replacement has negative value. Multiplying a penalty by a negative
-   * number turns it into a bonus, and the further below replacement the player
-   * is the larger that bonus grows -- which had the board ranking a sixth-string
-   * tight end above startable players precisely because he was terrible. Sign is
-   * decided by each factor explicitly; this only ever supplies size.
-   */
-  /**
-   * Magnitude to scale proportional adjustments by.
+   * This replaces value over replacement as the thing being ranked. The old
+   * measure graded the player in isolation and then corrected for the roster
+   * with a stack of percentage adjustments, which is what kept going wrong:
+   * percentages of a number that can be negative turn penalties into rewards,
+   * and percentages of a number near zero stop mattering at all. Asking what he
+   * adds to the lineup answers the roster question directly, in points, and
+   * cannot come out negative.
    *
-   * Every factor below is a percentage *of the player's value*, and a player
-   * below replacement has negative value. Multiplying a penalty by a negative
-   * number turns it into a bonus, and the further below replacement the player
-   * is the larger that bonus grows. Sign is decided by each factor explicitly;
-   * this only ever supplies size.
+   * Value over replacement is still reported, because it is a familiar and
+   * useful thing to see. It just no longer decides anything.
    */
-  const scale = Math.abs(vorpValue);
+  const value = ctx.marginal;
+  const scale = value;
 
   b.setBase(
-    vorpValue,
+    value,
+    "marginal_value",
+    "Points added to your lineup",
+    `Adding ${player.name} improves the best lineup this roster can field by about ${value.toFixed(0)} points over the season, measured against the best ${pos} you could still expect to get at pick ${ctx.state.nextPickNumber}.`,
+  );
+
+  b.note(
     "vorp",
     "Value over replacement",
     `Projected ${proj.points.toFixed(0)} points on the season, ${vorpValue.toFixed(0)} more than the last startable ${pos} in a ${ctx.settings.size}-team league.`,
   );
 
-  // --- Roster need ---
-  const needFactor = ctx.need[pos] ?? 0;
-  if (needFactor > 0) {
-    const bonus = scale * 0.15 * needFactor;
-    b.add(
-      "roster_need",
-      "Fills a need",
-      needFactor >= 0.6
-        ? `You still need ${formatNeed(needFactor)} more starting ${pos}${needFactor >= 1.6 ? "s" : ""}, so this pick goes straight into your lineup.`
-        : `Your ${pos} starters are set, but flex demand means there is still ${formatNeed(needFactor)} ${pos} value left to fill.`,
-      bonus,
-    );
-  } else {
-    // Not a penalty for depth exactly -- a penalty for depth you cannot start,
-    // and it has to escalate. A flat haircut prices the fourth running back and
-    // the eleventh identically, which is how a board talks itself into eleven
-    // running backs: the position's raw value-over-replacement stays the
-    // highest on the board long after the roster has stopped being able to use
-    // it. The surplus term is what makes each additional one worth less than
-    // the last.
-    // Measured against the position's own demand, not in absolute players. A
-    // second quarterback in a one-quarterback league is a whole surplus
-    // starter; a fourth running back where you start two and a half is a
-    // fifth of one. Penalising them equally is what leaves the board rostering
-    // three quarterbacks it can never start two of.
-    const demand = Math.max(0.5, ctx.perTeamDemand[pos] ?? 1);
-    // The player being scored is the marginal one, so he counts himself.
-    // Measuring only what the roster already holds means a second kicker in a
-    // one-kicker league registers as zero surplus and escapes with the
-    // starting-rate haircut, which is how a board talks itself into a backup
-    // kicker over a startable receiver.
-    const surplus = Math.max(0, ctx.owned[pos] + 1 - demand);
-    // Each surplus starter's worth of depth halves what the next one is worth.
-    // A first backup is insurance and holds real value; a fourth is a roster
-    // spot you set on fire. A fixed rate, however steep, cannot express that,
-    // and a capped one leaves the deepest position on the roster still winning
-    // picks.
-    const depth = Math.ceil(surplus / demand);
-    const rate = 1 - 0.88 * Math.pow(0.5, depth);
-    b.add(
-      "position_filled",
-      surplus >= demand ? `${pos} is your deepest position` : "Position already filled",
-      surplus >= demand
-        ? `You already carry ${ctx.owned[pos]} ${pos}${ctx.owned[pos] === 1 ? "" : "s"} against ${(ctx.perTeamDemand[pos] ?? 0).toFixed(1)} starting spots. Another one cannot crack your lineup, so his value here is a fraction of his projection.`
-        : `Your ${pos} starting slots are already covered, so this player's value only shows up as depth or a trade chip.`,
-      -scale * rate,
-    );
-  }
+  // Roster need and positional saturation used to live here as percentage
+  // adjustments. Both are now inside the base: a player who fills a hole
+  // improves the lineup a lot, and a sixth running back improves it by nothing,
+  // without anybody having to choose a coefficient for either.
 
   // --- Survival: will they be there at my next turn? ---
   const measuredSd = ctx.state.market?.stdevFor(player);
@@ -399,57 +421,59 @@ function score(proj: Projection, ctx: ScoreContext): DraftRecommendation {
     );
   }
 
+  // Both of these were score adjustments and are now notes, because the base
+  // already prices them. A player likely to last is compared against himself,
+  // so his value collapses on its own; discounting him again would count the
+  // same fact twice.
   if (ctx.picksUntilNextTurn > 0) {
     if (survival > 0.6) {
-      // Very likely to last: taking them now spends a pick you did not need to.
-      const discount = scale * 0.2 * (survival - 0.6) / 0.4;
-      b.add(
+      b.note(
         "likely_to_last",
         "Can wait",
         `About a ${(survival * 100).toFixed(0)}% chance they are still on the board at pick ${ctx.state.nextPickNumber}, so you can likely take a scarcer position first and still get them.`,
-        -discount,
       );
     } else if (survival < 0.25) {
-      const urgency = Math.min(scale * 0.25, tier.dropoff * 0.5 + 3) * (1 - survival / 0.25);
-      b.add(
+      b.note(
         "last_chance",
         "Now or never",
         `Only about a ${(survival * 100).toFixed(0)}% chance they last until pick ${ctx.state.nextPickNumber}. If you want them, this is the turn.`,
-        urgency,
       );
     }
   }
 
-  // --- Tier cliff ---
+  // --- Tier cliff, and price against the market ---
+  //
+  // All notes, carrying no score. Each of these was a flat bonus in points --
+  // up to twelve for a cliff, eight for a player falling past his usual draft
+  // slot -- which was noise beside a base in the hundreds and is decisive
+  // beside a base that is correctly zero. That is exactly how this change first
+  // went wrong: backup quarterbacks scored nothing on merit, collected twenty
+  // points of flat bonuses, and the board took eight of them.
+  //
+  // The information is still worth showing. It just cannot be allowed to
+  // outrank whether the player improves your lineup at all.
   if (tier.remaining <= 2 && tier.dropoff >= 8) {
-    const cliffBonus = Math.min(tier.dropoff * 0.4, 12);
-    b.add(
+    b.note(
       "tier_cliff",
       "Last of the tier",
       `Only ${tier.remaining} player${tier.remaining === 1 ? "" : "s"} left in this ${pos} tier, and the next tier down is about ${tier.dropoff.toFixed(0)} points worse over the season.`,
-      cliffBonus,
     );
   }
 
-  // --- ADP value ---
   if (Number.isFinite(player.averageDraftPosition)) {
     const adp = player.averageDraftPosition;
     const slip = adp - ctx.state.pickNumber;
     if (slip >= 8) {
-      const bonus = Math.min(slip * 0.15, 8);
-      b.add(
+      b.note(
         "adp_value",
         "Falling",
         `Typically drafted around pick ${adp.toFixed(0)} but still available at ${ctx.state.pickNumber} -- ${slip.toFixed(0)} picks of surplus value.`,
-        bonus,
       );
     } else if (slip <= -12) {
-      const penalty = Math.min(Math.abs(slip) * 0.1, 6);
-      b.add(
+      b.note(
         "adp_reach",
         "A reach",
         `Usually goes around pick ${adp.toFixed(0)}; taking them at ${ctx.state.pickNumber} is roughly ${Math.abs(slip).toFixed(0)} picks early.`,
-        -penalty,
       );
     }
   }
@@ -623,7 +647,7 @@ export function bandByValue(
 ): ValueBand[] {
   if (recommendations.length < 3) return [];
 
-  const byValue = [...recommendations].sort((a, b) => b.vorp - a.vorp);
+  const byValue = [...recommendations].sort((a, b) => b.score - a.score);
   const groups: DraftRecommendation[][] = [];
 
   for (const rec of byValue) {
@@ -633,7 +657,7 @@ export function bandByValue(
     // player. Chaining neighbour-to-neighbour lets a long shallow slope walk a
     // band from elite to replacement level one small step at a time, which is
     // how a "tier" ends up spanning sixty points and meaning nothing.
-    if (leader && rec.vorp >= leader.vorp - bandTolerance(leader.vorp) && groups.length <= maxBands) {
+    if (leader && rec.score >= leader.score - bandTolerance(leader.score) && groups.length <= maxBands) {
       current.push(rec);
     } else {
       groups.push([rec]);
@@ -641,27 +665,31 @@ export function bandByValue(
   }
 
   return groups.slice(0, maxBands).map((members, i, all) => {
-    const values = members.map((m) => m.vorp);
+    const values = members.map((m) => m.score);
     const valueHigh = Math.max(...values);
     const valueLow = Math.min(...values);
-    const nextBandTop = all[i + 1]?.[0]?.vorp;
+    const nextBandTop = all[i + 1]?.[0]?.score;
 
-    // Within a band, value is settled; what is left is fit, which is exactly
-    // what the score already weighs.
-    const mostValuable = members[0];
     const byFit = [...members].sort((a, b) => b.score - a.score);
     const bestFit = byFit[0];
 
+    // The note now says something sharper than it used to. Everyone in a band
+    // is worth the same *to this roster*, so when the pick is not the
+    // best-projected player in the group, the projection is not the reason --
+    // the roster is.
+    const bestProjected = [...members].sort(
+      (a, b) => b.projection.points - a.projection.points,
+    )[0];
     let fitNote: string | null = null;
-    if (members.length > 1 && bestFit.player.id !== mostValuable.player.id) {
-      const reason = bestFit.reasons.find(
-        (r) => r.direction === "positive" && r.code !== "vorp" && r.code !== "survival",
-      );
+    const projectionGap = bestProjected.projection.points - bestFit.projection.points;
+    // Only worth remarking on when the projections genuinely disagree. A point
+    // or two apart is the same player twice and saying so is noise.
+    if (members.length > 1 && bestFit.player.id !== bestProjected.player.id && projectionGap >= 10) {
       fitNote =
-        `${bestFit.player.name} and ${mostValuable.player.name} are worth about the same here ` +
-        `(${valueLow.toFixed(0)}-${valueHigh.toFixed(0)} over replacement), but ${bestFit.player.name} ` +
-        `fits this roster better` +
-        (reason ? `: ${reason.label.toLowerCase()}.` : `.`);
+        `${bestFit.player.name} and ${bestProjected.player.name} are worth about the same to this ` +
+        `roster, even though ${bestProjected.player.name} is projected for ` +
+        `${projectionGap.toFixed(0)} more points over the season. Take ${bestFit.player.name}: the ` +
+        `extra projection lands somewhere your lineup cannot use it.`;
     }
 
     return {

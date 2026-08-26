@@ -335,17 +335,63 @@ describe("draft value regressions", () => {
     }
   });
 
-  it("lets them back in during the final rounds", () => {
-    const rounds = 16;
-    const lastRoundPick = (rounds - 1) * 12 + 1;
-    const late = boardAtPick(lastRoundPick);
+  // The board defers a defence because a comparable one will still be there
+  // later. Once there is no later, that argument expires and it has to take
+  // one -- but only if the slot is actually empty.
+  it("lets them back in once there are no picks left to wait for", () => {
+    // Everything filled but the defence, so the comparison is about the defence
+    // rather than about which of five holes is biggest.
+    const take = (position: string, n: number) =>
+      pool.filter((p) => p.position === position).slice(0, n);
+    const emptyRoster = [
+      ...take("QB", 1),
+      ...take("RB", 2),
+      ...take("WR", 2),
+      ...take("TE", 1),
+      ...take("K", 1),
+    ];
+    const lastPick = 15 * 12;
+    const late = buildDraftBoard(
+      pool,
+      league.settings,
+      {
+        pickNumber: lastPick,
+        nextPickNumber: lastPick,
+        drafted: new Set(emptyRoster.map((p) => p.id)),
+        myRoster: emptyRoster,
+      },
+      12,
+    );
+    const lateRank = late.recommendations.findIndex((r) => r.player.position === "DST");
+    expect(lateRank).toBeGreaterThanOrEqual(0);
+
     const earlyRank = boardAtPick(41).recommendations.findIndex(
       (r) => r.player.position === "DST",
     );
-    const lateRank = late.recommendations.findIndex((r) => r.player.position === "DST");
-    // Present and better ranked late than early (or absent early entirely).
-    expect(lateRank).toBeGreaterThanOrEqual(0);
     if (earlyRank >= 0) expect(lateRank).toBeLessThan(earlyRank);
+  });
+
+  // The other half of the same rule, and the one the old scoring got wrong:
+  // when the slot is already filled, another defence is worth nothing at any
+  // point in the draft, final round included.
+  it("still refuses a second defence in the final round", () => {
+    const withDefence = [
+      ...pool.filter((p) => p.position === "RB").slice(0, 2),
+      ...pool.filter((p) => p.position === "DST").slice(0, 1),
+    ];
+    const lastPick = 15 * 12;
+    const late = buildDraftBoard(
+      pool,
+      league.settings,
+      {
+        pickNumber: lastPick,
+        nextPickNumber: lastPick,
+        drafted: new Set(withDefence.map((p) => p.id)),
+        myRoster: withDefence,
+      },
+      12,
+    );
+    expect(late.recommendations[0]?.player.position).not.toBe("DST");
   });
 
   // A league starting one TE was told it needed "2 more starting TE" because
