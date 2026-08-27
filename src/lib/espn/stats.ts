@@ -52,9 +52,20 @@ export const STAT_META: Record<number, StatMeta> = {
   68: { label: "Fumbles", category: "turnover", standard: 0 },
   72: { label: "Fumbles lost", category: "turnover", standard: -2 },
 
-  83: { label: "Field goals made", category: "kicking", standard: 3 },
-  84: { label: "Field goals attempted", category: "kicking", standard: 0 },
-  85: { label: "Field goals missed", category: "kicking", standard: -1 },
+  // Field-goal ids are deliberately absent, and that is a correction rather
+  // than an omission. They were mapped as 83 made / 84 attempted / 85 missed,
+  // and this league's published rules pay -1 for 83 while carrying no positive
+  // field-goal scoring anywhere in forty-nine rules. A league that docks a
+  // kicker for making one does not exist, so at least one of those labels is
+  // wrong -- most likely they are distance-banded misses, given 79 at -0.5 and
+  // 82 at -1 sitting beside them unmapped.
+  //
+  // Nothing computed anywhere reads them: they are absent from STAT_FIELDS, so
+  // no study scores them, and absent from BASELINE_VOLUME, so the league
+  // profile never reports them as deviations. The only exposure was `statLabel`
+  // printing a confident wrong name, which is exactly what this map promises
+  // not to do. Restore them when the mapping can be verified against ESPN's own
+  // applied totals for a kicker.
   86: { label: "Extra points made", category: "kicking", standard: 1 },
   88: { label: "Extra points missed", category: "kicking", standard: -1 },
 
