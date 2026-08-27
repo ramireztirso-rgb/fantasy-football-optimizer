@@ -88,7 +88,10 @@ export default function ManualDraftPage() {
     if (!tracked) return;
     try {
       const size = data?.settings.size || 12;
-      const rounds = 16;
+      // Starters plus bench, never IR -- the same rule the engine follows.
+      const rounds = data
+        ? data.settings.lineupSlots.reduce((n, s) => n + s.count, 0) + data.settings.benchSlots
+        : 15;
       const mine = myPicks(tracked.seat, size, rounds);
       const current = tracked.picks.length + 1;
       let next = current;
@@ -122,8 +125,14 @@ export default function ManualDraftPage() {
   }, [tracked]);
 
   const size = data?.settings.size || 12;
+  const roundsNow = data
+    ? data.settings.lineupSlots.reduce((n, s) => n + s.count, 0) + data.settings.benchSlots
+    : 15;
   const current = (tracked?.picks.length ?? 0) + 1;
-  const mine = useMemo(() => myPicks(tracked?.seat ?? 1, size, 16), [tracked?.seat, size]);
+  const mine = useMemo(
+    () => myPicks(tracked?.seat ?? 1, size, roundsNow),
+    [tracked?.seat, size, roundsNow],
+  );
   const isMyPick = mine.has(current);
 
   const mark = (player: PoolPlayer) => {
