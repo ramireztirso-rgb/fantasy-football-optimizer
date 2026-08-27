@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Reasons } from "@/components/Reasons";
 import { Card, DemoBanner, ErrorBox, Loading, Pill, Stat } from "@/components/ui";
+import { DraftModeToggle } from "@/components/DraftModeToggle";
 import type { LeagueSettings, Player, Position } from "@/lib/domain/types";
 import type { DraftBoard } from "@/lib/engine/draft";
 import type { LiveDraftContext, PositionalRun } from "@/lib/engine/draftLive";
@@ -84,7 +85,14 @@ export default function DraftPage() {
   }, [autoRefresh, data?.draft.inProgress, load]);
 
   if (error) return <ErrorBox {...error} />;
-  if (loading || !data) return <Loading what="the draft board" />;
+  if (loading || !data) {
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-end"><DraftModeToggle /></div>
+        <Loading what="the draft board" />
+      </div>
+    );
+  }
 
   const { draft, board, settings, correction } = data;
   const isMock = data.mock === true;
@@ -108,6 +116,7 @@ export default function DraftPage() {
 
   return (
     <div className="space-y-6">
+      <div className="flex justify-end"><DraftModeToggle /></div>
       {data.isDemo && <DemoBanner />}
 
       <Card

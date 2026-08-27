@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card, ErrorBox, Loading, Pill } from "@/components/ui";
+import { DraftModeToggle } from "@/components/DraftModeToggle";
 import { Reasons } from "@/components/Reasons";
 import type { DraftBoard } from "@/lib/engine/draft";
 import type { LeagueSettings } from "@/lib/domain/types";
@@ -155,7 +156,14 @@ export default function ManualDraftPage() {
     });
   };
 
-  if (!tracked) return <Loading what="draft tracker" />;
+  if (!tracked) {
+    return (
+      <main className="mx-auto max-w-6xl space-y-6 px-4 py-8">
+        <div className="flex justify-end"><DraftModeToggle /></div>
+        <Loading what="draft tracker" />
+      </main>
+    );
+  }
 
   const filtered = (data?.available ?? [])
     .filter((p) => !query || p.name.toLowerCase().includes(query.toLowerCase()))
@@ -163,6 +171,7 @@ export default function ManualDraftPage() {
 
   return (
     <main className="mx-auto max-w-6xl space-y-6 px-4 py-8">
+      <div className="flex justify-end"><DraftModeToggle /></div>
       <Card
         title="Manual draft tracking"
         subtitle="ESPN's feed shows nothing until a draft ends, so on the night the picks come from you: one tap each as they happen in the room. The board keeps up."
