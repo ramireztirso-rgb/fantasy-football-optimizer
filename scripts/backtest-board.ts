@@ -113,6 +113,75 @@ async function main() {
   );
 
   const deltas: { total: number[]; playoff: number[] } = { total: [], playoff: [] };
+  const calDeltas: { total: number[]; playoff: number[] } = { total: [], playoff: [] };
+
+  // --- Pass one: how wrong are the projections, per position, per season? ---
+  //
+  // The 2019 roster made the case: statistics-only projections rate veteran
+  // quarterbacks flat and high, and the marginal engine coherently over-buys
+  // what the projections overrate. Whether a positional correction helps is
+  // decidable on outcomes, so it is fitted leave-one-season-out here and
+  // applied as a fourth arm below -- never fitted on the season being drafted.
+  interface BiasPair {
+    season: number;
+    position: Position;
+    projection: number;
+    actual: number;
+  }
+  const biasPairs: BiasPair[] = [];
+  for (const season of seasons) {
+    const raw = await loadAdp(season).catch(() => []);
+    if (raw.length < rounds * teams) continue;
+    const outcomes = [...adpOutcomesBySeason.entries()]
+      .filter(([s]) => s !== season)
+      .flatMap(([, v]) => v);
+    const projector = buildPeriodProjector(season, history, settings, outcomes);
+    const actualByGsis = new Map(
+      (seasonLines.get(season) ?? []).map((l) => [
+        l.gsisId,
+        scoreStatLine(l, settings, l.position as Position).points,
+      ]),
+    );
+    for (const p of raw.slice(0, rounds * teams)) {
+      const gsisId = gsisByName.get(normalizeName(p.name));
+      if (!gsisId) continue;
+      const projected = projector.project({
+        gsisId,
+        identity: identityByGsis.get(gsisId),
+        position: p.position,
+        adp: p.adp,
+      });
+      if (projected.basis !== "component" || projected.points <= 0) continue;
+      biasPairs.push({
+        season,
+        position: p.position,
+        projection: projected.points,
+        actual: actualByGsis.get(gsisId) ?? 0,
+      });
+    }
+  }
+  const correction = (excludeSeason: number, position: Position): number => {
+    const ratios = biasPairs
+      .filter((b) => b.season !== excludeSeason && b.position === position && b.projection > 50)
+      .map((b) => b.actual / b.projection)
+      .sort((a, b) => a - b);
+    if (ratios.length < 10) return 1;
+    return ratios[Math.floor(ratios.length / 2)];
+  };
+
+  console.log("Projection bias by position (actual ÷ projected, median):");
+  for (const position of ["QB", "RB", "WR", "TE"] as Position[]) {
+    const all = biasPairs
+      .filter((b) => b.position === position && b.projection > 50)
+      .map((b) => b.actual / b.projection)
+      .sort((a, b) => a - b);
+    if (all.length) {
+      console.log(
+        `  ${position}  ×${all[Math.floor(all.length / 2)].toFixed(2)}  (${all.length} player-seasons)`,
+      );
+    }
+  }
+  console.log("");
 
   for (const season of seasons) {
     const raw = await loadAdp(season).catch(() => []);
@@ -178,11 +247,27 @@ async function main() {
     // best-projected-available with no reasoning at all: board minus greedy
     // isolates what the reasoning is worth on identical knowledge, which is
     // the only clean question here.
-    const arms = { adp: [] as number[], greedy: [] as number[], board: [] as number[] };
-    const playoffArms = { adp: [] as number[], greedy: [] as number[], board: [] as number[] };
+    // The calibrated pool: same entries, projections scaled by the
+    // leave-one-out positional correction.
+    const calEntries: BoardEntry[] = entries.map((e) => {
+      const scale = e.basis === "component" ? correction(season, e.position) : 1;
+      const points = e.projection * scale;
+      return {
+        ...e,
+        projection: points,
+        player: {
+          ...(e.player as unknown as Record<string, unknown>),
+          seasonProjectedPoints: points,
+          projectedPoints: points / 17,
+        } as unknown as Player,
+      };
+    });
+
+    const arms = { adp: [] as number[], greedy: [] as number[], board: [] as number[], boardCal: [] as number[] };
+    const playoffArms = { adp: [] as number[], greedy: [] as number[], board: [] as number[], boardCal: [] as number[] };
     for (let seat = 1; seat <= teams; seat++) {
-      for (const mode of ["adp", "greedy", "board"] as const) {
-        const roster = draft(entries, seat, mode);
+      for (const mode of ["adp", "greedy", "board", "boardCal"] as const) {
+        const roster = draft(mode === "boardCal" ? calEntries : entries, seat, mode === "boardCal" ? "board" : mode);
         const scored = score(roster, pointsByWeek);
         arms[mode].push(scored.total);
         playoffArms[mode].push(scored.playoff);
@@ -200,10 +285,12 @@ async function main() {
     const knowledge = mean(arms.greedy) - mean(arms.adp);
     deltas.total.push(reasoning);
     deltas.playoff.push(mean(playoffArms.board) - mean(playoffArms.greedy));
+    calDeltas.total.push(mean(arms.boardCal) - mean(arms.board));
+    calDeltas.playoff.push(mean(playoffArms.boardCal) - mean(playoffArms.board));
     console.log(
-      `  ${season}: reasoning ${signed(reasoning)} (board vs greedy) · ` +
-        `knowledge ${signed(knowledge)} (greedy vs ADP) · ` +
-        `whole tool ${signed(mean(arms.board) - mean(arms.adp))} vs market`,
+      `  ${season}: reasoning ${signed(reasoning)} · knowledge ${signed(knowledge)} · ` +
+        `whole tool ${signed(mean(arms.board) - mean(arms.adp))} · ` +
+        `calibration ${signed(mean(arms.boardCal) - mean(arms.board))} on top of the board`,
     );
 
     function draft(pool: BoardEntry[], mySeat: number, mode: "adp" | "greedy" | "board"): BoardEntry[] {
@@ -296,6 +383,12 @@ async function main() {
   console.log(
     `\n  Reasoning's worth, on identical knowledge: ${signed(mean(deltas.total))} ± ${se.toFixed(0)} ` +
       `points a season (${sigmas.toFixed(1)}x noise), ${signed(mean(deltas.playoff))} in weeks 15-17.`,
+  );
+  const calSe = calDeltas.total.length > 1 ? stdev(calDeltas.total) / Math.sqrt(calDeltas.total.length) : 0;
+  const calSig = calSe > 0 ? Math.abs(mean(calDeltas.total)) / calSe : 0;
+  console.log(
+    `  Positional calibration on top of the board: ${signed(mean(calDeltas.total))} ± ${calSe.toFixed(0)} ` +
+      `(${calSig.toFixed(1)}x noise), ${signed(mean(calDeltas.playoff))} in weeks 15-17.`,
   );
   console.log(
     `\n  The knowledge column is the honest cost of statistics-only projections\n` +
