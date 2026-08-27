@@ -20,6 +20,7 @@
     "workload": "tsx --conditions=react-server scripts/study-workload.ts",
     "backfields": "tsx --conditions=react-server scripts/backfields.ts",
     "outlook": "tsx --conditions=react-server scripts/backfield-outlook.ts",
+    "targets": "tsx --conditions=react-server scripts/target-outlook.ts",
     "qb-effect": "tsx --conditions=react-server scripts/study-qb-effect.ts",
     "coaching": "tsx --conditions=react-server scripts/study-coaching.ts",
     "schedule": "tsx --conditions=react-server scripts/study-schedule.ts",
