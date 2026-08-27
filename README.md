@@ -232,13 +232,14 @@ npm run typecheck   # tsc --noEmit
 
 ## Known limits
 
-- **The ESPN integration has not been exercised against a live league.** It was
-  built against ESPN's documented v3 API shape and is covered by fixture-based
-  tests that pin the payload parsing, but ESPN's API is undocumented and changes
-  between seasons. `npm run verify` exists precisely to confirm the wiring on
-  your league and to point at what broke if something has moved. The live draft
-  feed in particular has never been watched during a real draft — test it before
-  draft day, not on it.
+- **ESPN's read API is blind during live drafts — proven, not suspected.**
+  Watched against a real draft room (2026-08-27): the API returned zero picks
+  for the entire draft and served all of them at once the moment it completed.
+  The draft room itself runs on a private websocket. On draft night, use
+  `/draft/manual` — one tap per pick as it happens in the room, and the board
+  reacts through the same engine. Everything else about the integration is
+  verified against a live league; `npm run verify` confirms the wiring and
+  `npm run readiness` checks every source the board leans on.
 - **Cross-season ADP is deliberately not used.** A player's ADP moves hundreds
   of picks between years, so comparing a 2024 pick against this year's ADP
   measures that player's career, not your league's behaviour. Where same-season
