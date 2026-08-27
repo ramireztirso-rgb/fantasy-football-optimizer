@@ -68,7 +68,27 @@ export async function POST(request: Request) {
     };
 
     const board = buildDraftBoard(pool, league.settings, state, Math.min(60, body.limit ?? 30));
-    return NextResponse.json({ isDemo, settings: league.settings, state: { ...state, drafted: [...state.drafted] }, board });
+    // The whole available pool rides along, light: manual pick tracking needs
+    // to mark ANY player drafted, including ones the board would never
+    // recommend, and a search box is only as good as the list behind it.
+    const available = pool
+      .filter((p) => !state.drafted.has(p.id))
+      .sort((a, b) => a.averageDraftPosition - b.averageDraftPosition)
+      .slice(0, 450)
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        position: p.position,
+        proTeam: p.proTeam,
+        adp: p.averageDraftPosition,
+      }));
+    return NextResponse.json({
+      isDemo,
+      settings: league.settings,
+      state: { ...state, drafted: [...state.drafted] },
+      board,
+      available,
+    });
   } catch (err) {
     const { body, status } = toErrorResponse(err);
     return NextResponse.json(body, { status });
