@@ -3,16 +3,30 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Reasons } from "@/components/Reasons";
 import { Card, DemoBanner, ErrorBox, Loading, Pill, Stat } from "@/components/ui";
-import { DraftModeToggle } from "@/components/DraftModeToggle";
 import type { LeagueSettings, Player, Position } from "@/lib/domain/types";
 import type { DraftBoard } from "@/lib/engine/draft";
 import type { LiveDraftContext, PositionalRun } from "@/lib/engine/draftLive";
 import type { Reason } from "@/lib/engine/explain";
 
+interface TrackedPick {
+  id: number;
+  name: string;
+  position: string;
+  proTeam?: string;
+}
+
+const TRACKED_KEY = "draft-tracked-picks-v1";
+
 interface LiveDraftResponse {
   isDemo: boolean;
   /** True when the server is running the practice room rather than ESPN. */
   mock?: boolean;
+  /** True when ESPN's feed itself is delivering picks. */
+  feedAlive?: boolean;
+  /** Available players by ADP, for marking any pick by hand. */
+  available?: Array<{ id: number; name: string; position: string; proTeam: string; adp: number }>;
+  /** Snake order, for attributing hand-tracked picks to teams. */
+  pickOrder?: number[];
   settings: LeagueSettings;
   draft: {
     connected: boolean;
@@ -51,10 +65,20 @@ export default function DraftPage() {
 
   const load = useCallback(async () => {
     try {
+      let manual: TrackedPick[] = [];
+      try {
+        manual = JSON.parse(localStorage.getItem(TRACKED_KEY) ?? "[]") as TrackedPick[];
+      } catch {
+        // A broken record is an empty record.
+      }
       const res = await fetch("/api/draft/live", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ previousTargets: previousTargets.current, limit: 25 }),
+        body: JSON.stringify({
+          previousTargets: previousTargets.current,
+          limit: 25,
+          manualPicks: manual.map((m) => m.id),
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw json;
@@ -88,14 +112,14 @@ export default function DraftPage() {
   if (loading || !data) {
     return (
       <div className="space-y-6">
-        <div className="flex justify-end"><DraftModeToggle /></div>
-        <Loading what="the draft board" />
+          <Loading what="the draft board" />
       </div>
     );
   }
 
   const { draft, board, settings, correction } = data;
   const isMock = data.mock === true;
+  const feedAlive = data.feedAlive === true;
 
   // A pick in the practice room: post it, then refetch so the board reacts the
   // way it will on the night -- through the polling loop, not a local update.
@@ -116,7 +140,6 @@ export default function DraftPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-end"><DraftModeToggle /></div>
       {data.isDemo && <DemoBanner />}
 
       <Card
@@ -199,6 +222,20 @@ export default function DraftPage() {
               : `Pick ${draft.currentPick} — rivals are drafting. Your turn at #${draft.myNextPick ?? "—"}.`}
           </p>
         </Card>
+      )}
+
+      {!isMock && (
+        <PickTracker
+          available={data.available ?? []}
+          onChanged={() => void load()}
+          feedAlive={feedAlive}
+          onTheClock={onTheClock}
+          currentPick={draft.currentPick}
+          pickOrder={data.pickOrder ?? []}
+          teams={draft.teams}
+          myTeamId={draft.mySeat?.teamId ?? null}
+          size={settings.size || 12}
+        />
       )}
 
       {onTheClock && board.recommendations[0] && (
@@ -444,7 +481,12 @@ function RecommendationRow({
           {(rec.survivalProbability * 100).toFixed(0)}% lasts
           {rec.survivalBasis === "league-needs" ? " (league)" : " (ADP)"}
         </Pill>
-        <span className="tabular ml-auto text-lg font-semibold">{rec.score.toFixed(0)}</span>
+        <span
+          className="tabular ml-auto text-lg font-semibold"
+          title="Points this pick adds to your starting lineup over the season, versus the best you could still get at your next turn"
+        >
+          +{rec.score.toFixed(0)}
+        </span>
         {onDraft && (
           <button
             type="button"
@@ -457,5 +499,175 @@ function RecommendationRow({
       </div>
       <Reasons reasons={rec.reasons} />
     </li>
+  );
+}
+
+function PickTracker({
+  available,
+  onChanged,
+  feedAlive,
+  onTheClock,
+  currentPick,
+  pickOrder,
+  teams,
+  myTeamId,
+  size,
+}: {
+  available: Array<{ id: number; name: string; position: string; proTeam: string; adp: number }>;
+  onChanged: () => void;
+  feedAlive: boolean;
+  onTheClock: boolean;
+  currentPick: number;
+  pickOrder: number[];
+  teams: LiveDraftContext["teams"];
+  myTeamId: number | null;
+  size: number;
+}) {
+  const [tracked, setTracked] = useState<TrackedPick[]>([]);
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(true);
+
+  useEffect(() => {
+    try {
+      setTracked(JSON.parse(localStorage.getItem(TRACKED_KEY) ?? "[]") as TrackedPick[]);
+    } catch {
+      setTracked([]);
+    }
+  }, []);
+
+  const save = (next: TrackedPick[]) => {
+    setTracked(next);
+    try {
+      localStorage.setItem(TRACKED_KEY, JSON.stringify(next));
+    } catch {
+      // Losing persistence is survivable; losing the tap is not.
+    }
+    onChanged();
+  };
+
+  const filtered = available
+    .filter((p) => !query || p.name.toLowerCase().includes(query.toLowerCase()))
+    .slice(0, query ? 8 : 10);
+
+  return (
+    <Card
+      title="Pick tracking"
+      subtitle={
+        feedAlive
+          ? "ESPN's feed is delivering picks, so tapping is optional -- the board already sees them."
+          : "ESPN's feed goes blind during live drafts, so the picks come from you: tap each player as he comes off the board. Yours included -- on your pick, tap who you took."
+      }
+      right={
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => save(tracked.slice(0, -1))}
+            className="rounded-lg border border-pitch-700 px-2 py-1 text-xs text-chalk-300 hover:bg-pitch-800"
+          >
+            Undo
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (window.confirm("Clear every tracked pick?")) save([]);
+            }}
+            className="rounded-lg border border-pitch-700 px-2 py-1 text-xs text-chalk-300 hover:bg-pitch-800"
+          >
+            Reset
+          </button>
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="rounded-lg border border-pitch-700 px-2 py-1 text-xs text-chalk-300 hover:bg-pitch-800"
+          >
+            {open ? "Hide" : "Show"}
+          </button>
+        </div>
+      }
+    >
+      {open && (
+        <>
+          <div className="mb-3 flex flex-wrap items-center gap-3">
+            <Pill tone={onTheClock ? "good" : "neutral"}>
+              Pick {currentPick}
+              {onTheClock ? " — YOUR PICK" : ""}
+            </Pill>
+          </div>
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search any player…"
+            className="w-full rounded-lg border border-pitch-700 bg-pitch-900 px-3 py-2 text-sm text-chalk-100 placeholder:text-chalk-600"
+          />
+          <div className="mt-3 flex flex-wrap gap-2">
+            {filtered.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => {
+                  save([
+                    ...tracked,
+                    { id: p.id, name: p.name, position: p.position, proTeam: p.proTeam },
+                  ]);
+                  setQuery("");
+                }}
+                className="rounded-lg border border-pitch-700 bg-pitch-800/60 px-3 py-1.5 text-sm text-chalk-200 hover:border-gain-600/50 hover:bg-gain-600/15"
+              >
+                <span className="font-medium">{p.name}</span>
+                <span className="ml-1.5 text-xs text-chalk-500">
+                  {p.position} · ADP {Math.round(p.adp)}
+                </span>
+              </button>
+            ))}
+          </div>
+          {tracked.length > 0 && (
+            <div className="mt-4 border-t border-pitch-800 pt-3">
+              <p className="mb-2 text-xs uppercase tracking-wide text-chalk-500">
+                The record — laid out like ESPN's Pick History tab, so the two
+                compare row for row
+              </p>
+              {/* Grouped by round with pick/player/team columns, mirroring the
+                  room's own history so verifying is a glance, not a mapping. */}
+              {Array.from({ length: Math.ceil(tracked.length / size) }, (_, r) => (
+                <div key={r} className="mb-3">
+                  <p className="mb-1 text-sm font-semibold text-chalk-300">Round {r + 1}</p>
+                  <div className="grid grid-cols-[3rem_1fr_1fr] gap-x-3 text-xs uppercase tracking-wide text-chalk-600">
+                    <span>Pick</span>
+                    <span>Player</span>
+                    <span>Team</span>
+                  </div>
+                  <ol>
+                    {tracked.slice(r * size, (r + 1) * size).map((p, i) => {
+                      const overall = r * size + i + 1;
+                      const within = (overall - 1) % size;
+                      const index = (r + 1) % 2 === 1 ? within : size - 1 - within;
+                      const teamId = pickOrder[index];
+                      const team = teams.find((t) => t.teamId === teamId);
+                      const isMine = myTeamId !== null && teamId === myTeamId;
+                      return (
+                        <li
+                          key={`${p.id}-${overall}`}
+                          className="grid grid-cols-[3rem_1fr_1fr] items-baseline gap-x-3 border-b border-pitch-800/60 py-1.5 text-sm last:border-0"
+                        >
+                          <span className="tabular text-chalk-500">{overall}</span>
+                          <span>
+                            <span className={isMine ? "font-semibold" : ""}>{p.name}</span>{" "}
+                            <span className="text-xs text-chalk-500">{p.proTeam ?? ""}</span>{" "}
+                            <Pill tone="neutral">{p.position}</Pill>
+                          </span>
+                          <span className={isMine ? "font-semibold text-gain-400" : "text-chalk-400"}>
+                            {team?.name ?? (teamId !== undefined ? `Team ${teamId}` : "—")}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </Card>
   );
 }
