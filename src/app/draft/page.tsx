@@ -75,8 +75,11 @@ export default function DraftPage() {
   // While a draft is running, picks land every few seconds; outside one there is
   // nothing to poll for.
   useEffect(() => {
-    if (!autoRefresh || !data?.draft.inProgress) return;
-    const timer = setInterval(() => void load(), 8000);
+    if (!autoRefresh) return;
+    // Slow poll before the draft, fast during. The pre-draft poll is what
+    // notices the room opening -- without it a page opened early sits frozen
+    // until someone remembers to refresh, which on the night nobody does.
+    const timer = setInterval(() => void load(), data?.draft.inProgress ? 8000 : 30000);
     return () => clearInterval(timer);
   }, [autoRefresh, data?.draft.inProgress, load]);
 
