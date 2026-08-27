@@ -96,6 +96,8 @@ async function main() {
   findings.push(windKillsPassing(games));
   findings.push(domeBoost(games));
   findings.push(...touchdownRegression(playerSeasons));
+  findings.push(revengeGame(games));
+  findings.push(shortRestFatigue(games));
 
   console.log(renderScorecard(findings));
 }
@@ -478,6 +480,110 @@ function touchdownRegression(playerSeasons: Game[][]): Finding[] {
   );
 
   return [persistence, consequence];
+}
+
+/**
+ * "He always plays out of his mind against his old team."
+ *
+ * A good test of the machinery as much as the claim, because it is the sort of
+ * thing that gets asserted every week on the strength of the games where it
+ * happened. Nobody brings up the eleven quiet ones.
+ *
+ * Measured against the player's own average that season, so the comparison is
+ * a player against himself rather than against other players. A revenge game
+ * is a real fixture whatever else is true, and if the effect exists it should
+ * show as him beating his own baseline in those weeks specifically.
+ */
+function revengeGame(games: Game[]): Finding {
+  // Which teams each player had already played for before a given season.
+  const teamsBefore = new Map<string, Map<number, Set<string>>>();
+  const sorted = [...games].sort((a, b) => a.season - b.season || a.week - b.week);
+  const seen = new Map<string, Set<string>>();
+  for (const g of sorted) {
+    const bySeason = teamsBefore.get(g.gsisId) ?? new Map<number, Set<string>>();
+    if (!bySeason.has(g.season)) {
+      bySeason.set(g.season, new Set(seen.get(g.gsisId) ?? []));
+      teamsBefore.set(g.gsisId, bySeason);
+    }
+    const played = seen.get(g.gsisId) ?? new Set<string>();
+    played.add(g.team);
+    seen.set(g.gsisId, played);
+  }
+
+  // Season averages, so each game can be judged against the player's own form.
+  const seasonMean = new Map<string, number>();
+  const bucket = new Map<string, number[]>();
+  for (const g of games) {
+    const key = `${g.season}:${g.gsisId}`;
+    bucket.set(key, [...(bucket.get(key) ?? []), g.points]);
+  }
+  for (const [key, points] of bucket) {
+    if (points.length >= 8) seasonMean.set(key, mean(points));
+  }
+
+  const revenge: number[] = [];
+  const ordinary: number[] = [];
+  for (const g of games) {
+    if (g.touches < 3 && g.targets < 3) continue;
+    const average = seasonMean.get(`${g.season}:${g.gsisId}`);
+    if (average === undefined) continue;
+    const priorTeams = teamsBefore.get(g.gsisId)?.get(g.season);
+    // Only counts if he had played for them *before* this season, and is not
+    // playing for them now.
+    const isRevenge =
+      priorTeams?.has(g.opponent) === true && g.opponent !== g.team && priorTeams.size > 1;
+    const delta = g.points - average;
+    if (isRevenge) revenge.push(delta);
+    else ordinary.push(delta);
+  }
+
+  return judge(
+    "Players beat their average against a former team",
+    { label: "their other games", values: ordinary },
+    { label: "games against a former team", values: revenge },
+    "pts vs own average",
+    { expect: "increase", practicalThreshold: 1 },
+  );
+}
+
+/**
+ * "A heavy workload plus a short week is a fade."
+ *
+ * Thursday is the short week -- three days rather than six -- so the test is
+ * whether a back who was worked hard last Sunday drops off on the Thursday
+ * specifically, against backs equally worked who got the normal rest.
+ */
+function shortRestFatigue(games: Game[]): Finding {
+  const byPlayer = new Map<string, Game[]>();
+  for (const g of games) {
+    const key = `${g.season}:${g.gsisId}`;
+    byPlayer.set(key, [...(byPlayer.get(key) ?? []), g]);
+  }
+
+  const shortRest: number[] = [];
+  const normalRest: number[] = [];
+  for (const weeks of byPlayer.values()) {
+    if (weeks[0].position !== "RB") continue;
+    const ordered = [...weeks].sort((a, b) => a.week - b.week);
+    for (let i = 1; i < ordered.length; i++) {
+      const previous = ordered[i - 1];
+      const current = ordered[i];
+      // Consecutive weeks only: a bye or a missed game is not a short week.
+      if (current.week - previous.week !== 1) continue;
+      if (previous.touches < 20) continue;
+      if (!current.context) continue;
+      if (current.context.weekday === "Thursday") shortRest.push(current.points);
+      else if (current.context.weekday === "Sunday") normalRest.push(current.points);
+    }
+  }
+
+  return judge(
+    "Heavily used backs fade on a short week",
+    { label: "backs on normal rest", values: normalRest },
+    { label: "backs on a Thursday after 20+ touches", values: shortRest },
+    "pts",
+    { expect: "decrease", practicalThreshold: 1.5 },
+  );
 }
 
 function correlation(pairs: Array<[number, number]>): number {
