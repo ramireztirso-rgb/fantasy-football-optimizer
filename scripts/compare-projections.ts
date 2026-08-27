@@ -170,9 +170,12 @@ async function main() {
         : undefined;
 
     const own = componentProjection(lines, settings, player.position, baseline ?? 0, aging);
-    // Half the estimate coming from the positional baseline means we are
-    // describing the baseline, not the player.
-    if (!own || own.regression > 0.5) continue;
+    // Filtered on games rather than on the regression weight, which no longer
+    // means what it did: with a four-game half-weight point, a player would
+    // need under four games for the shrink to reach half, and that is a
+    // different and much weaker filter than intended. A season of football is
+    // the real threshold for having something to say about somebody.
+    if (!own || own.gamesOfHistory < 16) continue;
 
     const move = detectTeamChange(player, lines);
     const cmp = compareToForecast(player.seasonProjectedPoints, own, player.name);

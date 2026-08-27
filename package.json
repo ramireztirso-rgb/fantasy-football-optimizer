@@ -24,7 +24,8 @@
     "pace": "tsx --conditions=react-server scripts/study-pace.ts",
     "folkisms": "tsx --conditions=react-server scripts/folkisms.ts",
     "backtest": "tsx --conditions=react-server scripts/backtest-strategies.ts",
-    "streamers": "tsx --conditions=react-server scripts/study-streamers.ts"
+    "streamers": "tsx --conditions=react-server scripts/study-streamers.ts",
+    "calibrate": "tsx --conditions=react-server scripts/calibrate-projection.ts"
   },
   "dependencies": {
     "next": "^16.3.3",

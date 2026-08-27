@@ -28,11 +28,20 @@ const SEASON_WEIGHTS = [0.6, 0.28, 0.12];
 /**
  * Half-weight sample size, in games.
  *
- * At this many games of history the projection sits halfway between the
- * player's own rate and his position's baseline. Roughly a season: enough to
- * believe a player, not enough to bet a draft pick on alone.
+ * Calibrated rather than chosen. Every player-season since 2016 was projected
+ * forward under each candidate setting and scored against what actually
+ * happened, and four games wins at 2.389 points a game of average error.
+ *
+ * The previous value of sixteen was not merely suboptimal, it was harmful: at
+ * 2.552 it predicted worse than applying no shrink whatsoever, which comes in
+ * at 2.473. A player who has played is more informative about himself than the
+ * population is, far sooner than the old setting allowed, and shrinking a
+ * three-season veteran a quarter of the way toward the median is how Justin
+ * Jefferson ended up among the players the model thought were over-rated.
+ *
+ * See `npm run calibrate`.
  */
-const REGRESSION_GAMES = 16;
+const REGRESSION_GAMES = 4;
 
 /** Games a healthy starter is assumed available for. */
 const EXPECTED_GAMES = 16;
