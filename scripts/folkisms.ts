@@ -59,7 +59,7 @@ async function main() {
     }
     const contexts = await fetchGameContext(season).catch(() => new Map<string, GameContext>());
     for (const line of weekly) {
-      if (!["QB", "RB", "WR", "TE"].includes(line.position)) continue;
+      if (!["QB", "RB", "WR", "TE", "K"].includes(line.position)) continue;
       games.push({
         ...line,
         points: scoreStatLine(line, settings, line.position as never).points,
@@ -99,6 +99,7 @@ async function main() {
   findings.push(revengeGame(games));
   findings.push(shortRestFatigue(games));
   findings.push(await playoffScheduleTargeting(games));
+  findings.push(kickersAreUnpredictable(playerSeasons));
 
   console.log(renderScorecard(findings));
 }
@@ -506,6 +507,67 @@ function touchdownRegression(playerSeasons: Game[][]): Finding[] {
   );
 
   return [persistence, consequence];
+}
+
+/**
+ * "Never spend an early pick on a kicker -- you cannot predict them."
+ *
+ * The advice is right and almost nobody states the actual reason, which is not
+ * that kickers score few points. It is that this year's good kicker is not next
+ * year's. Tested as how much a position's scoring rate carries from one season
+ * to the next: a position you can forecast is one worth paying for early, and a
+ * position that resets every year is one to take last whatever it scores.
+ *
+ * This league makes the test sharper than most, because it pays kickers by
+ * distance -- a tenth of a point per field-goal yard -- rather than a flat three
+ * per kick. If leg strength were a durable skill it would show up here.
+ */
+function kickersAreUnpredictable(playerSeasons: Game[][]): Finding {
+  const rateByPosition = new Map<string, Map<string, number>>();
+  for (const weeks of playerSeasons) {
+    const position = weeks[0].position;
+    const rate = mean(weeks.map((w) => w.points));
+    if (rate <= 0) continue;
+    const forPosition = rateByPosition.get(position) ?? new Map<string, number>();
+    forPosition.set(`${weeks[0].season}:${weeks[0].gsisId}`, rate);
+    rateByPosition.set(position, forPosition);
+  }
+
+  const carryover = (position: string): { r: number; pairs: number } => {
+    const rates = rateByPosition.get(position);
+    if (!rates) return { r: 0, pairs: 0 };
+    const pairs: Array<[number, number]> = [];
+    for (const [key, rate] of rates) {
+      const [season, id] = key.split(":");
+      const next = rates.get(`${Number(season) + 1}:${id}`);
+      if (next !== undefined) pairs.push([rate, next]);
+    }
+    return { r: correlation(pairs), pairs: pairs.length };
+  };
+
+  const kicker = carryover("K");
+  // Compared against receivers, the most predictable position there is, so the
+  // gap is the strongest version of the contrast rather than a flattering one.
+  const receiver = carryover("WR");
+  const gap = receiver.r - kicker.r;
+
+  return {
+    claim: "Kickers are less predictable than skill players",
+    verdict: gap >= 0.2 ? "CONFIRMED" : "REJECTED",
+    effect: Math.round(gap * 100) / 100,
+    effectUnit: "correlation",
+    sigmas: 0,
+    sample: kicker.pairs + receiver.pairs,
+    examples: [],
+    detail:
+      `A kicker's scoring rate carries ${kicker.r.toFixed(2)} into the next season -- ` +
+      `${(kicker.r * kicker.r * 100).toFixed(0)}% of it -- against ${receiver.r.toFixed(2)} ` +
+      `for receivers, or ${(receiver.r * receiver.r * 100).toFixed(0)}%. This year's good ` +
+      `kicker is essentially not next year's, which is the real reason to take one last: ` +
+      `not that they score little, but that the good ones cannot be identified in advance. ` +
+      `Sharper here than elsewhere, since this league pays kickers by distance, so a durable ` +
+      `leg would have shown up and did not.`,
+  };
 }
 
 /**

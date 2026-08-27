@@ -31,6 +31,16 @@ const STAT_FIELDS: Record<number, keyof SeasonStatLine> = {
   211: "passingFirstDowns",
   212: "rushingFirstDowns",
   213: "receivingFirstDowns",
+
+  // Kicking. Stat 83 subtracting a point per made field goal looks wrong and is
+  // not: leagues that pay by distance use 214 for the yardage and 83 as the
+  // constant that calibrates it, so forty yards comes to 4.0 - 1 = 3.0.
+  214: "fieldGoalYards",
+  83: "fieldGoalsMade",
+  79: "fieldGoalsMissedMedium",
+  82: "fieldGoalsMissedLong",
+  86: "extraPointsMade",
+  88: "extraPointsMissed",
 };
 
 export interface ScoredStatLine {

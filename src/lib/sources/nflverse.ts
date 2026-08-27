@@ -41,6 +41,16 @@ export interface SeasonStatLine {
   passingFirstDowns: number;
   interceptions: number;
   fumblesLost: number;
+  /**
+   * Total yardage of made field goals, which is the whole basis of kicker
+   * scoring in leagues that pay by distance rather than per kick.
+   */
+  fieldGoalYards: number;
+  fieldGoalsMade: number;
+  fieldGoalsMissedMedium: number;
+  fieldGoalsMissedLong: number;
+  extraPointsMade: number;
+  extraPointsMissed: number;
 }
 
 /**
@@ -89,6 +99,12 @@ export async function fetchSeasonStats(season: number): Promise<SeasonStatLine[]
         passingFirstDowns: 0,
         interceptions: 0,
         fumblesLost: 0,
+        fieldGoalYards: 0,
+        fieldGoalsMade: 0,
+        fieldGoalsMissedMedium: 0,
+        fieldGoalsMissedLong: 0,
+        extraPointsMade: 0,
+        extraPointsMissed: 0,
       };
       totals.set(gsisId, line);
     }
@@ -111,6 +127,13 @@ export async function fetchSeasonStats(season: number): Promise<SeasonStatLine[]
     line.interceptions += num(row.passing_interceptions) ?? num(row.interceptions) ?? 0;
     line.fumblesLost += num(row.rushing_fumbles_lost) ?? 0;
     line.fumblesLost += num(row.receiving_fumbles_lost) ?? 0;
+    line.fieldGoalYards += num(row.fg_made_distance) ?? 0;
+    line.fieldGoalsMade += num(row.fg_made) ?? 0;
+    line.fieldGoalsMissedMedium += num(row.fg_missed_40_49) ?? 0;
+    line.fieldGoalsMissedLong +=
+      (num(row.fg_missed_50_59) ?? 0) + (num(row.fg_missed_60_) ?? 0);
+    line.extraPointsMade += num(row.pat_made) ?? 0;
+    line.extraPointsMissed += Math.max(0, (num(row.pat_att) ?? 0) - (num(row.pat_made) ?? 0));
   }
 
   return [...totals.values()];
@@ -139,6 +162,16 @@ export interface WeeklyStatLine {
   passingFirstDowns: number;
   interceptions: number;
   fumblesLost: number;
+  /**
+   * Total yardage of made field goals, which is the whole basis of kicker
+   * scoring in leagues that pay by distance rather than per kick.
+   */
+  fieldGoalYards: number;
+  fieldGoalsMade: number;
+  fieldGoalsMissedMedium: number;
+  fieldGoalsMissedLong: number;
+  extraPointsMade: number;
+  extraPointsMissed: number;
 }
 
 /**
@@ -183,6 +216,12 @@ export async function fetchWeeklyStats(season: number): Promise<WeeklyStatLine[]
       passingFirstDowns: num(row.passing_first_downs) ?? 0,
       interceptions: num(row.passing_interceptions) ?? num(row.interceptions) ?? 0,
       fumblesLost: (num(row.rushing_fumbles_lost) ?? 0) + (num(row.receiving_fumbles_lost) ?? 0),
+      fieldGoalYards: num(row.fg_made_distance) ?? 0,
+      fieldGoalsMade: num(row.fg_made) ?? 0,
+      fieldGoalsMissedMedium: num(row.fg_missed_40_49) ?? 0,
+      fieldGoalsMissedLong: (num(row.fg_missed_50_59) ?? 0) + (num(row.fg_missed_60_) ?? 0),
+      extraPointsMade: num(row.pat_made) ?? 0,
+      extraPointsMissed: Math.max(0, (num(row.pat_att) ?? 0) - (num(row.pat_made) ?? 0)),
     });
   }
   return out;
