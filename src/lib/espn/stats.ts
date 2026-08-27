@@ -52,22 +52,35 @@ export const STAT_META: Record<number, StatMeta> = {
   68: { label: "Fumbles", category: "turnover", standard: 0 },
   72: { label: "Fumbles lost", category: "turnover", standard: -2 },
 
-  // Field-goal ids are deliberately absent, and that is a correction rather
-  // than an omission. They were mapped as 83 made / 84 attempted / 85 missed,
-  // and this league's published rules pay -1 for 83 while carrying no positive
-  // field-goal scoring anywhere in forty-nine rules. A league that docks a
-  // kicker for making one does not exist, so at least one of those labels is
-  // wrong -- most likely they are distance-banded misses, given 79 at -0.5 and
-  // 82 at -1 sitting beside them unmapped.
+  // Kicking ids, every one of them checked against ESPN's own applied points
+  // for a real kicker rather than taken from documentation. The arithmetic
+  // closes exactly: Chris Boswell's 2025 season resolves to 116.7 - 27 + 42 -
+  // 0.5 - 2 - 1 = 128.2, which is the applied total ESPN reports.
   //
-  // Nothing computed anywhere reads them: they are absent from STAT_FIELDS, so
-  // no study scores them, and absent from BASELINE_VOLUME, so the league
-  // profile never reports them as deviations. The only exposure was `statLabel`
-  // printing a confident wrong name, which is exactly what this map promises
-  // not to do. Restore them when the mapping can be verified against ESPN's own
-  // applied totals for a kicker.
+  // Worth reading before anyone "fixes" 83. This league pays -1 for every field
+  // goal *made*, which looks like a transcription error and is not. Scoring here
+  // is by distance: 0.1 a yard on stat 214, minus one per kick. A forty-yard
+  // attempt is worth 4.0 - 1 = 3.0, exactly the platform default, while a
+  // fifty-five yarder earns 4.5 and a chip shot 1.5. The -1 is the constant
+  // that calibrates the yardage, not a penalty for succeeding.
+  74: { label: "Field goals made, 0-39", category: "kicking", standard: 3 },
+  75: { label: "Field goals attempted, 0-39", category: "kicking", standard: 0 },
+  76: { label: "Field goals missed, 0-39", category: "kicking", standard: -1 },
+  77: { label: "Field goals made, 40-49", category: "kicking", standard: 4 },
+  78: { label: "Field goals attempted, 40-49", category: "kicking", standard: 0 },
+  79: { label: "Field goals missed, 40-49", category: "kicking", standard: -1 },
+  80: { label: "Field goals made, 50+", category: "kicking", standard: 5 },
+  81: { label: "Field goals attempted, 50+", category: "kicking", standard: 0 },
+  82: { label: "Field goals missed, 50+", category: "kicking", standard: -1 },
+  83: { label: "Field goals made", category: "kicking", standard: 3 },
+  84: { label: "Field goals attempted", category: "kicking", standard: 0 },
+  85: { label: "Field goals missed", category: "kicking", standard: -1 },
   86: { label: "Extra points made", category: "kicking", standard: 1 },
   88: { label: "Extra points missed", category: "kicking", standard: -1 },
+  // Total yardage of made field goals. Absent from most leagues, which is why
+  // it defaults to nothing -- and the entire basis of kicker scoring in this
+  // one, at a tenth of a point per yard.
+  214: { label: "Field goal yards", category: "kicking", standard: 0 },
 
   89: { label: "0 points allowed", category: "defense", standard: 5 },
   90: { label: "1-6 points allowed", category: "defense", standard: 4 },
