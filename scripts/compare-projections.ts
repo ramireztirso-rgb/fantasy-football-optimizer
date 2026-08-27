@@ -5,11 +5,11 @@
  * ranks, and if ESPN is wrong about somebody the board is wrong about him in
  * exactly the same direction with no way to notice.
  *
- * This builds the second opinion: every player's recent production, scored
- * under this league's rules, regressed for sample size, set beside the
- * forecast. It does not adjudicate -- a forecast far above a young player's
- * own rate is usually pricing in a role that has not shown up yet and is
- * often right. It just stops the disagreement being invisible.
+ * The second opinion itself lives in the source the draft board uses -- this
+ * script is the league-wide view of it: both tails of the disagreement, sorted,
+ * with the team-change flags that mark where the history is least trustworthy.
+ * It used to assemble the aging curve and baselines itself, in parallel with
+ * the source, which was two implementations of one model waiting to drift.
  *
  *   npm run compare
  *   npm run compare -- --position WR --max-adp 120
@@ -22,16 +22,7 @@ loadEnvFile(".env");
 
 const { credentialsFromEnv } = await import("../src/lib/espn/client");
 const { fetchDraftPool, fetchLeague } = await import("../src/lib/espn/league");
-const { fetchPlayerIdIndex, ageAtSeason } = await import("../src/lib/sources/playerIds");
-const { buildAgeCurve } = await import("../src/lib/engine/aging");
-const { scoreStatLine } = await import("../src/lib/engine/scoreFromStats");
-const { fetchSeasonStats } = await import("../src/lib/sources/nflverse");
-const { componentProjection, positionalBaselines, compareToForecast } = await import(
-  "../src/lib/engine/componentProjection"
-);
-const { detectTeamChange } = await import("../src/lib/engine/teamChange");
-
-type SeasonStatLine = Awaited<ReturnType<typeof fetchSeasonStats>>[number];
+const { fetchSecondOpinion } = await import("../src/lib/sources/secondOpinion");
 
 interface Row {
   name: string;
@@ -40,155 +31,50 @@ interface Row {
   forecast: number;
   own: number;
   relativeGap: number;
-  games: number;
-  /** Points a game the aging curve added or removed. */
   aged: number;
-  /** Where he played last, when that is somewhere else. */
   movedFrom: string | null;
 }
 
 const args = process.argv.slice(2);
 const onlyPosition = readFlag("--position")?.toUpperCase();
 const maxAdp = Number(readFlag("--max-adp") ?? 180);
-const seasonsBack = Number(readFlag("--seasons") ?? 3);
 const show = Number(readFlag("--show") ?? 12);
 /**
- * Below this, ESPN is not making a low forecast -- it is saying the player will
- * not play. Comparing "0 projected points" against a healthy season's
- * production measures a depth-chart or injury decision, not a disagreement
- * about volume, and it swamps the tail with noise.
+ * Below this, ESPN is not making a low forecast -- it is saying the player
+ * will not play, which is a depth-chart call rather than a disagreement.
  */
 const minForecast = Number(readFlag("--min-forecast") ?? 60);
 
-/** nflverse carries every position on an NFL roster; only these are fantasy. */
-const FANTASY_POSITIONS = new Set(["QB", "RB", "WR", "TE", "K", "DST"]);
-
 async function main() {
   const creds = credentialsFromEnv();
-  const [pool, league, ids] = await Promise.all([
-    fetchDraftPool(creds),
-    fetchLeague(creds),
-    fetchPlayerIdIndex(),
-  ]);
-  const settings = league.settings;
+  const [pool, league] = await Promise.all([fetchDraftPool(creds), fetchLeague(creds)]);
+  const opinions = await fetchSecondOpinion(league.settings);
 
-  const latest = settings.seasonId - 1;
-  const seasons: number[] = [];
-  const history = new Map<string, SeasonStatLine[]>();
-  const byPosition = new Map<string, SeasonStatLine[]>();
-
-  for (let season = latest - seasonsBack + 1; season <= latest; season++) {
-    try {
-      const lines = await fetchSeasonStats(season);
-      seasons.push(season);
-      for (const line of lines) {
-        const prior = history.get(line.gsisId) ?? [];
-        prior.push(line);
-        history.set(line.gsisId, prior);
-        if (!FANTASY_POSITIONS.has(line.position)) continue;
-        const pos = byPosition.get(line.position) ?? [];
-        pos.push(line);
-        byPosition.set(line.position, pos);
-      }
-    } catch (err) {
-      console.log(`  ${season} unavailable: ${err instanceof Error ? err.message : err}`);
-    }
-  }
-
-  if (!seasons.length) {
-    console.error("✗ No seasons loaded.");
-    process.exitCode = 1;
-    return;
-  }
-
-  // The aging curve, fitted from the same seasons rather than assumed. Without
-  // it the disagreement below sorts almost perfectly by age, which is an aging
-  // curve showing through rather than anything anyone can act on.
-  const ageObservations: Array<{ position: never; age: number; delta: number }> = [];
-  const rateByKey = new Map<string, number>();
-  for (const [gsisId, lines] of history) {
-    for (const line of lines) {
-      if (line.games < 8) continue;
-      const scored = scoreStatLine(line, settings, line.position as never);
-      if (scored.pointsPerGame > 0) rateByKey.set(`${line.season}:${gsisId}`, scored.pointsPerGame);
-    }
-  }
-  for (const [key, rate] of rateByKey) {
-    const [seasonText, gsisId] = key.split(":");
-    const next = rateByKey.get(`${Number(seasonText) + 1}:${gsisId}`);
-    if (next === undefined) continue;
-    const identity = ids.byGsisId.get(gsisId);
-    if (!identity?.position) continue;
-    const age = ageAtSeason(identity, Number(seasonText));
-    if (age === null) continue;
-    ageObservations.push({ position: identity.position as never, age, delta: next - rate });
-  }
-  const ageCurve = buildAgeCurve(ageObservations);
-  console.log(`Aging curve fitted on ${ageObservations.length} season pairs`);
-
-  const baselines = positionalBaselines(byPosition as never, settings);
-  console.log(`Seasons ${seasons.join(", ")} · scored under "${settings.name}" rules`);
   console.log(
-    `Replacement-level points per game: ` +
-      Object.entries(baselines)
-        .map(([pos, v]) => `${pos} ${(v as number).toFixed(1)}`)
-        .join("  "),
+    `Second opinions under "${league.settings.name}" rules · aging curve fitted on ${opinions.fitted} pairs`,
   );
 
   const rows: Row[] = [];
   let unmatched = 0;
-
   for (const player of pool) {
     if (player.averageDraftPosition > maxAdp) continue;
     if (onlyPosition && player.position !== onlyPosition) continue;
-
     if (player.seasonProjectedPoints < minForecast) continue;
 
-    const identity = ids.byEspnId.get(player.id);
-    const lines = identity?.gsisId ? history.get(identity.gsisId) : undefined;
-    if (!lines?.length) {
-      unmatched++;
+    const opinion = opinions.for(player);
+    if (!opinion) {
+      if (["QB", "RB", "WR", "TE"].includes(player.position)) unmatched++;
       continue;
     }
-
-    const baseline = baselines[player.position as never] as number | undefined;
-
-    const ageBySeason = new Map<number, number>();
-    for (const line of lines) {
-      const was = identity ? ageAtSeason(identity, line.season) : null;
-      if (was !== null) ageBySeason.set(line.season, was);
-    }
-    const targetAge = identity ? ageAtSeason(identity, settings.seasonId) : null;
-    const aging =
-      targetAge !== null && ageBySeason.size
-        ? {
-            ageBySeason,
-            targetAge,
-            between: (from: number, to: number) =>
-              ageCurve.between(player.position as never, from, to),
-          }
-        : undefined;
-
-    const own = componentProjection(lines, settings, player.position, baseline ?? 0, aging);
-    // Filtered on games rather than on the regression weight, which no longer
-    // means what it did: with a four-game half-weight point, a player would
-    // need under four games for the shrink to reach half, and that is a
-    // different and much weaker filter than intended. A season of football is
-    // the real threshold for having something to say about somebody.
-    if (!own || own.gamesOfHistory < 16) continue;
-
-    const move = detectTeamChange(player, lines);
-    const cmp = compareToForecast(player.seasonProjectedPoints, own, player.name);
     rows.push({
-      movedFrom: move?.changed ? move.from : null,
       name: player.name,
       position: player.position,
       adp: player.averageDraftPosition,
       forecast: player.seasonProjectedPoints,
-      own: own.points,
-      relativeGap: cmp.relativeGap,
-      aged: own.ageAdjustment,
-      games: own.gamesOfHistory,
+      own: opinion.fromOwnProduction,
+      relativeGap: opinion.relativeGap,
+      aged: opinion.ageAdjustment,
+      movedFrom: opinion.movedFrom,
     });
   }
 
@@ -212,7 +98,7 @@ async function main() {
 
   const agree = rows.filter((r) => Math.abs(r.relativeGap) < 0.15).length;
   console.log(
-    `\n${agree} of ${rows.length} (${((agree / rows.length) * 100).toFixed(0)}%) agree within 15%. ` +
+    `${agree} of ${rows.length} (${((agree / rows.length) * 100).toFixed(0)}%) agree within 15%. ` +
       `The tails are where the board currently has no second opinion.`,
   );
 }

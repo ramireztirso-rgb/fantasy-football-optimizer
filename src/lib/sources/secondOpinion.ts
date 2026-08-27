@@ -36,6 +36,8 @@ export interface SecondOpinion {
   /** What his own production projects to, in this league's points. */
   fromOwnProduction: number;
   gamesOfHistory: number;
+  /** Points a game the aging curve added or removed. */
+  ageAdjustment: number;
   /** Plain-language read of the gap, or null when the two broadly agree. */
   note: string | null;
   /** Set when he is somewhere new, naming where he came from. */
@@ -136,6 +138,7 @@ export async function fetchSecondOpinion(
         relativeGap: comparison.relativeGap,
         fromOwnProduction: own.points,
         gamesOfHistory: own.gamesOfHistory,
+        ageAdjustment: own.ageAdjustment,
         note: comparison.note,
         movedFrom: move?.changed ? move.from : null,
       };
