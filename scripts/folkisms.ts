@@ -101,6 +101,7 @@ async function main() {
   findings.push(await playoffScheduleTargeting(games));
   findings.push(kickersAreUnpredictable(playerSeasons));
   findings.push(toughCoverageSuppresses(games));
+  findings.push(handcuffInheritance(games));
 
   console.log(renderScorecard(findings));
 }
@@ -569,6 +570,92 @@ function kickersAreUnpredictable(playerSeasons: Game[][]): Finding {
       `Sharper here than elsewhere, since this league pays kickers by distance, so a durable ` +
       `leg would have shown up and did not.`,
   };
+}
+
+/**
+ * "A handcuff inherits the job when the starter goes down."
+ *
+ * This one is not folklore from outside -- it is a claim this project's own
+ * draft board makes. The handcuff note tells a manager the deputy "inherits a
+ * real workload the week that happens", and nobody had checked. If deputies do
+ * not actually collect the production when the starter sits, that note is
+ * selling insurance that does not pay out, and its wording has to change.
+ *
+ * The test: in every backfield with a real starter -- most carries, at least
+ * 55% of his team's backfield in the weeks he played -- find the No. 2 by
+ * present-week usage, then compare that deputy's scoring in the weeks the
+ * starter played against the weeks he did not. The claim predicts a jump big
+ * enough to start.
+ */
+function handcuffInheritance(games: Game[]): Finding {
+  const byTeamSeason = new Map<string, Game[]>();
+  for (const g of games) {
+    if (g.position !== "RB" || !g.team) continue;
+    const key = `${g.season}:${g.team}`;
+    byTeamSeason.set(key, [...(byTeamSeason.get(key) ?? []), g]);
+  }
+
+  const present: number[] = [];
+  const presentNames: string[] = [];
+  const absent: number[] = [];
+  const absentNames: string[] = [];
+
+  for (const group of byTeamSeason.values()) {
+    // The starter: most carries, and genuinely the starter rather than the
+    // larger half of a committee.
+    const byPlayer = new Map<string, Game[]>();
+    for (const g of group) byPlayer.set(g.gsisId, [...(byPlayer.get(g.gsisId) ?? []), g]);
+    const totals = [...byPlayer.entries()].map(([id, weeks]) => ({
+      id,
+      weeks,
+      carries: weeks.reduce((n, w) => n + w.carries, 0),
+    }));
+    totals.sort((a, b) => b.carries - a.carries);
+    const starter = totals[0];
+    if (!starter || starter.weeks.length < 6) continue;
+
+    const starterWeeks = new Set(starter.weeks.map((w) => w.week));
+    const teamWeeks = new Set(group.map((g) => g.week));
+    const absentWeeks = [...teamWeeks].filter((w) => !starterWeeks.has(w));
+    if (absentWeeks.length < 2) continue;
+
+    const presentCarries = group
+      .filter((g) => starterWeeks.has(g.week))
+      .reduce((n, g) => n + g.carries, 0);
+    const starterShare = presentCarries > 0 ? starter.carries / presentCarries : 0;
+    if (starterShare < 0.55) continue;
+
+    // The deputy: the No. 2 by usage while the starter played, which is who a
+    // manager would have identified as the handcuff before anyone got hurt.
+    const deputy = totals
+      .slice(1)
+      .map((t) => ({
+        ...t,
+        presentCarries: t.weeks
+          .filter((w) => starterWeeks.has(w.week))
+          .reduce((n, w) => n + w.carries, 0),
+      }))
+      .sort((a, b) => b.presentCarries - a.presentCarries)[0];
+    if (!deputy || deputy.presentCarries < 10) continue;
+
+    const deputyPresent = deputy.weeks.filter((w) => starterWeeks.has(w.week));
+    const deputyAbsent = deputy.weeks.filter((w) => !starterWeeks.has(w.week));
+    if (!deputyPresent.length || !deputyAbsent.length) continue;
+
+    const who = `${deputy.weeks[0].name} ${deputy.weeks[0].season}`;
+    present.push(mean(deputyPresent.map((w) => w.points)));
+    presentNames.push(who);
+    absent.push(mean(deputyAbsent.map((w) => w.points)));
+    absentNames.push(who);
+  }
+
+  return judge(
+    "A handcuff inherits the job when the starter sits",
+    { label: "deputy weeks with the starter playing", values: present, names: presentNames },
+    { label: "deputy weeks with the starter out", values: absent, names: absentNames },
+    "pts a game",
+    { expect: "increase", practicalThreshold: 3 },
+  );
 }
 
 /**
