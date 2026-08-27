@@ -20,7 +20,7 @@ loadEnvFile(".env");
 const { credentialsFromEnv } = await import("../src/lib/espn/client");
 const { fetchLeague } = await import("../src/lib/espn/league");
 const { fetchWeeklyStats } = await import("../src/lib/sources/nflverse");
-const { fetchGameContext, impliedTotalFor, spreadFor } = await import(
+const { fetchGameContext, impliedTotalFor, spreadFor, fetchTeamSeasons } = await import(
   "../src/lib/sources/schedules"
 );
 const { fetchPlayerIdIndex, ageAtSeason } = await import("../src/lib/sources/playerIds");
@@ -98,6 +98,7 @@ async function main() {
   findings.push(...touchdownRegression(playerSeasons));
   findings.push(revengeGame(games));
   findings.push(shortRestFatigue(games));
+  findings.push(await playoffScheduleTargeting(games));
 
   console.log(renderScorecard(findings));
 }
@@ -505,6 +506,81 @@ function touchdownRegression(playerSeasons: Game[][]): Finding[] {
   );
 
   return [persistence, consequence];
+}
+
+/**
+ * "Draft the players with an easy run in the fantasy playoffs."
+ *
+ * This one exists to check a tool rather than a saying. The board already
+ * reports which teams face soft defences in weeks fifteen to seventeen, built
+ * the way every such column is built: last season's points allowed. Whether
+ * that column predicts anything was never tested, only whether the defensive
+ * rankings behind it carry from year to year -- and they barely do, at ten
+ * percent.
+ *
+ * So: did players whose teams drew an easy playoff run actually beat their own
+ * form in those exact weeks? Measured against the player's own weeks one to
+ * fourteen, so a good player on a good team cannot pass for a schedule effect.
+ */
+async function playoffScheduleTargeting(games: Game[]): Promise<Finding> {
+  const seasons = await fetchTeamSeasons().catch(() => []);
+  const allowed = new Map<string, number>();
+  for (const s of seasons) {
+    if (s.games >= 14) allowed.set(`${s.season}:${s.team}`, s.pointsAgainst / s.games);
+  }
+
+  // A team's playoff-week draw, priced the way the column prices it: on the
+  // season *before* the one being played, since that is all a drafter knows.
+  const draw = new Map<string, number[]>();
+  for (const g of games) {
+    if (!g.context || ![15, 16, 17].includes(g.week)) continue;
+    const opponent = g.team === g.context.home ? g.context.away : g.context.home;
+    const opponentAllowed = allowed.get(`${g.season - 1}:${opponent}`);
+    if (opponentAllowed === undefined) continue;
+    const key = `${g.season}:${g.team}`;
+    draw.set(key, [...(draw.get(key) ?? []), opponentAllowed]);
+  }
+
+  const easy: number[] = [];
+  const easyNames: string[] = [];
+  const hard: number[] = [];
+  const hardNames: string[] = [];
+
+  const bySeason = new Map<string, Game[]>();
+  for (const g of games) {
+    const key = `${g.season}:${g.gsisId}`;
+    bySeason.set(key, [...(bySeason.get(key) ?? []), g]);
+  }
+
+  for (const weeks of bySeason.values()) {
+    const before = weeks.filter((w) => w.week <= 14).map((w) => w.points);
+    const playoff = weeks.filter((w) => [15, 16, 17].includes(w.week)).map((w) => w.points);
+    if (before.length < 8 || playoff.length < 2) continue;
+    if (mean(before) < 5) continue;
+
+    const opponents = draw.get(`${weeks[0].season}:${weeks[0].team}`);
+    if (!opponents || opponents.length < 2) continue;
+    const softness = mean(opponents);
+    // The player against himself: did the easy run lift him above his own form?
+    const lift = mean(playoff) - mean(before);
+    const who = `${weeks[0].name} ${weeks[0].season}`;
+
+    if (softness >= 24) {
+      easy.push(lift);
+      easyNames.push(who);
+    } else if (softness <= 21) {
+      hard.push(lift);
+      hardNames.push(who);
+    }
+  }
+
+  return judge(
+    "An easy playoff schedule lifts a player above his own form",
+    { label: "players with a hard week 15-17 draw", values: hard, names: hardNames },
+    { label: "players with an easy week 15-17 draw", values: easy, names: easyNames },
+    "pts vs own form",
+    { expect: "increase", practicalThreshold: 1 },
+  );
 }
 
 /**

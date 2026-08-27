@@ -116,8 +116,13 @@ async function main() {
   console.log(
     `\n  Spread between the best and worst draw: ${spread.toFixed(1)} points a game of\n` +
       `  opponent defence, shrunk by the ${(defR * defR * 100).toFixed(0)}% that actually carries over --\n` +
-      `  so expect nearer ${(spread * defR * defR).toFixed(1)} points a game of real effect, across three weeks.\n` +
-      `  A tiebreaker between close players, not a reason to move anybody far.`,
+      `  so expect nearer ${(spread * defR * defR).toFixed(1)} points a game of real effect, across three weeks.`,
+  );
+  console.log(
+    `\n  And that is still generous. Backtested directly -- did players who drew an\n` +
+      `  easy week 15-17 actually beat their own weeks 1-14 form? -- the answer is\n` +
+      `  0.46 points a game at 1.3 times the sampling noise, which is nothing. See\n` +
+      `  \`npm run folkisms\`. This table is worth reading and not worth drafting on.`,
   );
 }
 
