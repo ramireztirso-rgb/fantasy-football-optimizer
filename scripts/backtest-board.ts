@@ -32,6 +32,7 @@ const { fetchTextCached } = await import("../src/lib/sources/cache");
 const { scoreStatLine } = await import("../src/lib/engine/scoreFromStats");
 const { buildDraftBoard } = await import("../src/lib/engine/draft");
 const { buildPeriodProjector } = await import("../src/lib/analysis/periodProjection");
+const { backfieldShares, injuryRecord } = await import("../src/lib/engine/backfield");
 const { mean, stdev } = await import("../src/lib/analysis/scorecard");
 
 import type { Player, Position } from "../src/lib/domain/types";
@@ -114,6 +115,7 @@ async function main() {
 
   const deltas: { total: number[]; playoff: number[] } = { total: [], playoff: [] };
   const calDeltas: { total: number[]; playoff: number[] } = { total: [], playoff: [] };
+  const knobDeltas = { work: [] as number[], frag: [] as number[] };
 
   // --- Pass one: how wrong are the projections, per position, per season? ---
   //
@@ -247,6 +249,43 @@ async function main() {
     // best-projected-available with no reasoning at all: board minus greedy
     // isolates what the reasoning is worth on identical knowledge, which is
     // the only clean question here.
+    // Roles and durability from the season *before* the one being drafted --
+    // the same signal the live board's notes carry, here allowed to touch the
+    // number so the harness can say whether it should. Coefficients are fixed
+    // and stated, not fitted: a six-percent nudge for a back who owned his
+    // backfield, a ten-percent haircut for one who repeatedly misses time.
+    const priorShares = backfieldShares(
+      (seasonLines.get(season - 1) ?? []).filter((l) => l.position === "RB"),
+    );
+    const fragile = new Set<string>();
+    const workhorse = new Set<string>();
+    for (const e of entries) {
+      if (e.position !== "RB" || !e.gsisId) continue;
+      const share = priorShares.get(e.gsisId);
+      if (share && share.share >= 0.65) workhorse.add(e.gsisId);
+      const record = injuryRecord((history.get(e.gsisId) ?? []).filter((l) => l.season < season));
+      if (record.fragile) fragile.add(e.gsisId);
+    }
+    const scaledPool = (scale: (e: BoardEntry) => number): BoardEntry[] =>
+      entries.map((e) => {
+        const factor = scale(e);
+        if (factor === 1) return e;
+        const points = e.projection * factor;
+        return {
+          ...e,
+          projection: points,
+          player: {
+            ...(e.player as unknown as Record<string, unknown>),
+            seasonProjectedPoints: points,
+            projectedPoints: points / 17,
+          } as unknown as Player,
+        };
+      });
+    const workEntries = scaledPool((e) =>
+      e.gsisId && workhorse.has(e.gsisId) ? 1.06 : 1,
+    );
+    const fragEntries = scaledPool((e) => (e.gsisId && fragile.has(e.gsisId) ? 0.9 : 1));
+
     // The calibrated pool: same entries, projections scaled by the
     // leave-one-out positional correction.
     const calEntries: BoardEntry[] = entries.map((e) => {
@@ -263,11 +302,26 @@ async function main() {
       };
     });
 
-    const arms = { adp: [] as number[], greedy: [] as number[], board: [] as number[], boardCal: [] as number[] };
-    const playoffArms = { adp: [] as number[], greedy: [] as number[], board: [] as number[], boardCal: [] as number[] };
+    const armNames = ["adp", "greedy", "board", "boardCal", "boardWork", "boardFrag"] as const;
+    const pools: Record<string, BoardEntry[]> = {
+      adp: entries,
+      greedy: entries,
+      board: entries,
+      boardCal: calEntries,
+      boardWork: workEntries,
+      boardFrag: fragEntries,
+    };
+    const arms = Object.fromEntries(armNames.map((n) => [n, [] as number[]])) as Record<
+      (typeof armNames)[number],
+      number[]
+    >;
+    const playoffArms = Object.fromEntries(armNames.map((n) => [n, [] as number[]])) as Record<
+      (typeof armNames)[number],
+      number[]
+    >;
     for (let seat = 1; seat <= teams; seat++) {
-      for (const mode of ["adp", "greedy", "board", "boardCal"] as const) {
-        const roster = draft(mode === "boardCal" ? calEntries : entries, seat, mode === "boardCal" ? "board" : mode);
+      for (const mode of armNames) {
+        const roster = draft(pools[mode], seat, mode === "adp" || mode === "greedy" ? mode : "board");
         const scored = score(roster, pointsByWeek);
         arms[mode].push(scored.total);
         playoffArms[mode].push(scored.playoff);
@@ -287,10 +341,12 @@ async function main() {
     deltas.playoff.push(mean(playoffArms.board) - mean(playoffArms.greedy));
     calDeltas.total.push(mean(arms.boardCal) - mean(arms.board));
     calDeltas.playoff.push(mean(playoffArms.boardCal) - mean(playoffArms.board));
+    knobDeltas.work.push(mean(arms.boardWork) - mean(arms.board));
+    knobDeltas.frag.push(mean(arms.boardFrag) - mean(arms.board));
     console.log(
-      `  ${season}: reasoning ${signed(reasoning)} · knowledge ${signed(knowledge)} · ` +
-        `whole tool ${signed(mean(arms.board) - mean(arms.adp))} · ` +
-        `calibration ${signed(mean(arms.boardCal) - mean(arms.board))} on top of the board`,
+      `  ${season}: reasoning ${signed(reasoning)} · calibration ${signed(mean(arms.boardCal) - mean(arms.board))} · ` +
+        `workhorse ${signed(mean(arms.boardWork) - mean(arms.board))} · ` +
+        `fragile-fade ${signed(mean(arms.boardFrag) - mean(arms.board))}  (all on top of the board)`,
     );
 
     function draft(pool: BoardEntry[], mySeat: number, mode: "adp" | "greedy" | "board"): BoardEntry[] {
@@ -390,6 +446,16 @@ async function main() {
     `  Positional calibration on top of the board: ${signed(mean(calDeltas.total))} ± ${calSe.toFixed(0)} ` +
       `(${calSig.toFixed(1)}x noise), ${signed(mean(calDeltas.playoff))} in weeks 15-17.`,
   );
+  for (const [label, values] of [
+    ["workhorse boost (+6% to 65%+ backs)", knobDeltas.work],
+    ["fragile fade (-10% to repeat missers)", knobDeltas.frag],
+  ] as const) {
+    const kse = values.length > 1 ? stdev(values) / Math.sqrt(values.length) : 0;
+    const ksig = kse > 0 ? Math.abs(mean(values)) / kse : 0;
+    console.log(
+      `  ${label}: ${signed(mean(values))} ± ${kse.toFixed(0)} (${ksig.toFixed(1)}x noise)`,
+    );
+  }
   console.log(
     `\n  The knowledge column is the honest cost of statistics-only projections\n` +
       `  against a market that reads the news. It is not the board's fault and not\n` +
