@@ -100,6 +100,7 @@ async function main() {
   findings.push(shortRestFatigue(games));
   findings.push(await playoffScheduleTargeting(games));
   findings.push(kickersAreUnpredictable(playerSeasons));
+  findings.push(toughCoverageSuppresses(games));
 
   console.log(renderScorecard(findings));
 }
@@ -568,6 +569,98 @@ function kickersAreUnpredictable(playerSeasons: Game[][]): Finding {
       `Sharper here than elsewhere, since this league pays kickers by distance, so a durable ` +
       `leg would have shown up and did not.`,
   };
+}
+
+/**
+ * "Sit your receiver against a shutdown corner."
+ *
+ * Real coverage grades are not available here, so this uses the stand-in
+ * everybody reaches for: how many fantasy points a defence gave up to receivers
+ * last season. That substitution is the weakness of the test and has to be said
+ * plainly -- a team-level number cannot see which corner travels, and a
+ * receiver facing a great defence with one bad corner is invisible to it.
+ *
+ * Two things make it worth running anyway. It is the version of the claim most
+ * people actually act on, since almost nobody has coverage grades either. And
+ * it is measured against the receiver's own form that season, so a good
+ * receiver on a good team cannot pass for a matchup effect.
+ *
+ * Priced on the previous season, because that is what a manager setting a
+ * lineup in September knows.
+ */
+function toughCoverageSuppresses(games: Game[]): Finding {
+  // What each defence gave up to receivers, per game, per season.
+  const conceded = new Map<string, { points: number; games: Set<number> }>();
+  for (const g of games) {
+    if (g.position !== "WR" || !g.opponent) continue;
+    const key = `${g.season}:${g.opponent}`;
+    const entry = conceded.get(key) ?? { points: 0, games: new Set<number>() };
+    entry.points += g.points;
+    entry.games.add(g.week);
+    conceded.set(key, entry);
+  }
+  const allowedPerGame = new Map<string, number>();
+  for (const [key, entry] of conceded) {
+    if (entry.games.size >= 14) allowedPerGame.set(key, entry.points / entry.games.size);
+  }
+
+  // The toughest and softest defences of each season, by what they conceded.
+  const rankBySeason = new Map<number, { tough: Set<string>; soft: Set<string> }>();
+  const seasons = new Set([...allowedPerGame.keys()].map((k) => Number(k.split(":")[0])));
+  for (const season of seasons) {
+    const teams = [...allowedPerGame.entries()]
+      .filter(([k]) => k.startsWith(`${season}:`))
+      .map(([k, v]) => [k.split(":")[1], v] as [string, number])
+      .sort((a, b) => a[1] - b[1]);
+    if (teams.length < 24) continue;
+    rankBySeason.set(season, {
+      tough: new Set(teams.slice(0, 6).map(([t]) => t)),
+      soft: new Set(teams.slice(-6).map(([t]) => t)),
+    });
+  }
+
+  const seasonMean = new Map<string, number>();
+  const bucket = new Map<string, number[]>();
+  for (const g of games) {
+    if (g.position !== "WR") continue;
+    const key = `${g.season}:${g.gsisId}`;
+    bucket.set(key, [...(bucket.get(key) ?? []), g.points]);
+  }
+  for (const [key, points] of bucket) {
+    if (points.length >= 10) seasonMean.set(key, mean(points));
+  }
+
+  const versusTough: number[] = [];
+  const toughNames: string[] = [];
+  const versusSoft: number[] = [];
+  const softNames: string[] = [];
+
+  for (const g of games) {
+    if (g.position !== "WR" || !g.opponent) continue;
+    if (g.targets < 4) continue;
+    const average = seasonMean.get(`${g.season}:${g.gsisId}`);
+    if (average === undefined || average < 5) continue;
+    // The previous season's ranking, which is what was knowable at the time.
+    const ranks = rankBySeason.get(g.season - 1);
+    if (!ranks) continue;
+    const lift = g.points - average;
+    const who = `${g.name} ${g.season} wk${g.week}`;
+    if (ranks.tough.has(g.opponent)) {
+      versusTough.push(lift);
+      toughNames.push(who);
+    } else if (ranks.soft.has(g.opponent)) {
+      versusSoft.push(lift);
+      softNames.push(who);
+    }
+  }
+
+  return judge(
+    "Receivers are suppressed by a top pass defence",
+    { label: "games against the softest six", values: versusSoft, names: softNames },
+    { label: "games against the toughest six", values: versusTough, names: toughNames },
+    "pts vs own form",
+    { expect: "decrease", practicalThreshold: 1 },
+  );
 }
 
 /**
