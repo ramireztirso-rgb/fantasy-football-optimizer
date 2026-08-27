@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
+import { getBoardSources } from "@/lib/sources/boardSources";
 import { getDraftPoolData, getLeague, toErrorResponse } from "@/lib/data";
 import { buildDraftBoard, type DraftState } from "@/lib/engine/draft";
-import { fetchAdpMarket } from "@/lib/sources/adp";
-import { fetchBackfieldSource } from "@/lib/sources/backfieldSource";
-import { fetchSecondOpinion } from "@/lib/sources/secondOpinion";
 
 export const dynamic = "force-dynamic";
 
@@ -25,30 +23,9 @@ export async function POST(request: Request) {
     const { data: league, isDemo } = await getLeague();
     const { data: pool } = await getDraftPoolData();
 
-    // Measured draft-slot spreads, when the market is reachable. A failure here
-    // costs accuracy in the survival model and nothing else, so it is caught
-    // rather than propagated: no outside source gets to break a live draft.
-    const market = await fetchAdpMarket(league.settings).catch((err) => {
-      // Logged rather than swallowed. A silent fallback here is indistinguishable
-      // from the market simply agreeing with ESPN about everybody, which is not a
-      // thing anyone should have to guess at during a draft.
-      console.warn("[adp] market unavailable, falling back to estimated spreads:", err);
-      return undefined;
-    });
-
-    // Backfield usage and durability. Purely additional -- when it is missing
-    // the board says less about running backs and ranks them identically.
-    const backfield = await fetchBackfieldSource(league.settings.seasonId).catch((err) => {
-      console.warn("[backfield] usage data unavailable:", err);
-      return undefined;
-    });
-
-    // The second opinion on every projection. Same contract as the others: a
-    // failure costs the board an opinion, never a draft.
-    const secondOpinion = await fetchSecondOpinion(league.settings).catch((err) => {
-      console.warn("[second-opinion] history unavailable:", err);
-      return undefined;
-    });
+    // Assembled once per process and reused for ten minutes: rebuilding these
+    // per poll cost seconds, which turned every hand-tracked tap into felt lag.
+    const { market, backfield, secondOpinion } = await getBoardSources(league.settings, pool);
 
     const byId = new Map(pool.map((p) => [p.id, p]));
     const myRoster = (body.myRosterIds ?? [])

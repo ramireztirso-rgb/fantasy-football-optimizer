@@ -526,6 +526,8 @@ function PickTracker({
   const [tracked, setTracked] = useState<TrackedPick[]>([]);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(true);
+  /** Rounds the user explicitly opened or closed; everything else defaults. */
+  const [roundOverrides, setRoundOverrides] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
     try {
@@ -545,9 +547,20 @@ function PickTracker({
     onChanged();
   };
 
+  // Filtered against the local record too, so a tapped player vanishes from
+  // the quick row immediately. Waiting for the server's list made every tap
+  // feel broken for the second or two the board took to rebuild.
+  const trackedIds = new Set(tracked.map((t) => t.id));
   const filtered = available
+    .filter((p) => !trackedIds.has(p.id))
     .filter((p) => !query || p.name.toLowerCase().includes(query.toLowerCase()))
     .slice(0, query ? 8 : 10);
+
+  // Old rounds fold away by default -- only the round in progress stays open,
+  // and a header tap overrides either way.
+  const latestRound = Math.ceil(Math.max(1, tracked.length) / size);
+  const isCollapsed = (round: number) =>
+    roundOverrides[round] ?? round !== latestRound;
 
   return (
     <Card
@@ -630,7 +643,23 @@ function PickTracker({
                   room's own history so verifying is a glance, not a mapping. */}
               {Array.from({ length: Math.ceil(tracked.length / size) }, (_, r) => (
                 <div key={r} className="mb-3">
-                  <p className="mb-1 text-sm font-semibold text-chalk-300">Round {r + 1}</p>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setRoundOverrides((prev) => ({ ...prev, [r + 1]: !isCollapsed(r + 1) }))
+                    }
+                    className="mb-1 flex w-full items-center gap-2 text-left text-sm font-semibold text-chalk-300 hover:text-chalk-100"
+                  >
+                    <span className="text-chalk-500">{isCollapsed(r + 1) ? "▸" : "▾"}</span>
+                    Round {r + 1}
+                    {isCollapsed(r + 1) && (
+                      <span className="text-xs font-normal text-chalk-500">
+                        {Math.min(size, tracked.length - r * size)} picks
+                      </span>
+                    )}
+                  </button>
+                  {isCollapsed(r + 1) ? null : (
+                  <>
                   <div className="grid grid-cols-[3rem_1fr_1fr] gap-x-3 text-xs uppercase tracking-wide text-chalk-600">
                     <span>Pick</span>
                     <span>Player</span>
@@ -662,6 +691,8 @@ function PickTracker({
                       );
                     })}
                   </ol>
+                  </>
+                  )}
                 </div>
               ))}
             </div>

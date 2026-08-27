@@ -99,9 +99,24 @@ export async function fetchSecondOpinion(
   const curve = buildAgeCurve(observations);
   const baselines = positionalBaselines(byPosition as never, settings);
 
+  // Per-player answers are deterministic for the life of this source, and the
+  // board asks about hundreds of players per request, every eight seconds.
+  // Recomputing the projection each time was most of the CPU between a tapped
+  // pick and the board reacting.
+  const memo = new Map<number, SecondOpinion | undefined>();
+
   return {
     fitted: observations.length,
     for(player) {
+      if (memo.has(player.id)) return memo.get(player.id);
+      const answer = compute(player);
+      memo.set(player.id, answer);
+      return answer;
+    },
+  };
+
+  function compute(player: Player): SecondOpinion | undefined {
+    {
       if (!["QB", "RB", "WR", "TE"].includes(player.position)) return undefined;
       const identity = ids.byEspnId.get(player.id);
       const lines = identity?.gsisId ? history.get(identity.gsisId) : undefined;
@@ -142,6 +157,6 @@ export async function fetchSecondOpinion(
         note: comparison.note,
         movedFrom: move?.changed ? move.from : null,
       };
-    },
-  };
+    }
+  }
 }

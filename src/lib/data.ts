@@ -34,6 +34,14 @@ export function isConfigured(): boolean {
 }
 
 export async function getLeague(): Promise<DataSourceResult<League>> {
+  const cached = memoStore.__leagueMemo;
+  if (cached && Date.now() - cached.at < MEMO_TTL_MS) return cached.value;
+  const value = getLeagueUncached();
+  memoStore.__leagueMemo = { at: Date.now(), value };
+  return value;
+}
+
+async function getLeagueUncached(): Promise<DataSourceResult<League>> {
   if (!isConfigured()) {
     return { data: buildDemoLeague().league, isDemo: true };
   }
@@ -50,12 +58,33 @@ export async function getFreeAgentPool(week?: number): Promise<DataSourceResult<
 }
 
 export async function getDraftPoolData(): Promise<DataSourceResult<Player[]>> {
+  const cached = memoStore.__poolMemo;
+  if (cached && Date.now() - cached.at < MEMO_TTL_MS) return cached.value;
+  const value = getDraftPoolDataUncached();
+  memoStore.__poolMemo = { at: Date.now(), value };
+  return value;
+}
+
+async function getDraftPoolDataUncached(): Promise<DataSourceResult<Player[]>> {
   if (!isConfigured()) {
     return { data: buildDemoPlayers(), isDemo: true };
   }
   const players = await fetchDraftPool(credentialsFromEnv());
   return { data: players, isDemo: false };
 }
+
+/**
+ * Short-lived memos for the two reads that barely change but cost a network
+ * round trip each: the league and the player pool. Polled every eight seconds
+ * on the draft page, those round trips were most of the felt lag between
+ * tapping a pick and the board reacting. Draft status is deliberately NOT
+ * memoized -- it is the live feed itself.
+ */
+const memoStore = globalThis as unknown as {
+  __leagueMemo?: { at: number; value: Promise<DataSourceResult<League>> };
+  __poolMemo?: { at: number; value: Promise<DataSourceResult<Player[]>> };
+};
+const MEMO_TTL_MS = 60 * 1000;
 
 export async function getDraftStatus(): Promise<DataSourceResult<DraftStatus>> {
   if (!isConfigured()) {
