@@ -33,6 +33,8 @@ const { scoreStatLine } = await import("../src/lib/engine/scoreFromStats");
 const { buildDraftBoard } = await import("../src/lib/engine/draft");
 const { buildPeriodProjector } = await import("../src/lib/analysis/periodProjection");
 const { backfieldShares, injuryRecord } = await import("../src/lib/engine/backfield");
+const { fetchWeeklyStats: fetchWeeklyForSwing } = await import("../src/lib/sources/nflverse");
+void fetchWeeklyForSwing;
 const { mean, stdev } = await import("../src/lib/analysis/scorecard");
 
 import type { Player, Position } from "../src/lib/domain/types";
@@ -74,9 +76,11 @@ async function main() {
   // Season stats for every year once: history for projections, actuals for
   // scoring, and the ADP-outcome table for the rookie fallback.
   const seasonLines = new Map<number, Awaited<ReturnType<typeof fetchSeasonStats>>>();
+  const weeklyBySeason = new Map<number, Awaited<ReturnType<typeof fetchWeeklyStats>>>();
   for (let season = 2015; season <= 2025; season++) {
     try {
       seasonLines.set(season, await fetchSeasonStats(season));
+      weeklyBySeason.set(season, await fetchWeeklyStats(season));
     } catch {
       // Less history.
     }
@@ -115,7 +119,12 @@ async function main() {
 
   const deltas: { total: number[]; playoff: number[] } = { total: [], playoff: [] };
   const calDeltas: { total: number[]; playoff: number[] } = { total: [], playoff: [] };
-  const knobDeltas = { work: [] as number[], frag: [] as number[] };
+  const knobDeltas = {
+    work: [] as number[],
+    frag: [] as number[],
+    shape: [] as number[],
+    shapePlayoff: [] as number[],
+  };
 
   // --- Pass one: how wrong are the projections, per position, per season? ---
   //
@@ -286,6 +295,35 @@ async function main() {
     );
     const fragEntries = scaledPool((e) => (e.gsisId && fragile.has(e.gsisId) ? 0.9 : 1));
 
+    // Floor-early, ceiling-late is a different kind of knob: it does not claim
+    // the projections are wrong, it claims the objective changes through a
+    // draft -- early picks should buy reliability, late picks should buy
+    // lottery tickets. Swing is each player's prior-season weekly spread per
+    // point scored, period-correct like everything else. The knob nudges
+    // steady players up in the first six rounds and swingy ones up from round
+    // ten, judged like every other arm and especially on weeks 15-17, which is
+    // the metric the ceiling half of the theory is about.
+    const swingByGsis = new Map<string, number>();
+    {
+      const priorWeekly = weeklyBySeason.get(season - 1) ?? [];
+      const points = new Map<string, number[]>();
+      for (const line of priorWeekly) {
+        if (!["QB", "RB", "WR", "TE"].includes(line.position)) continue;
+        const pts = scoreStatLine(line, settings, line.position as Position).points;
+        points.set(line.gsisId, [...(points.get(line.gsisId) ?? []), pts]);
+      }
+      for (const [gsisId, weeks] of points) {
+        if (weeks.length < 8) continue;
+        const m = mean(weeks);
+        if (m < 4) continue;
+        swingByGsis.set(gsisId, stdev(weeks) / m);
+      }
+    }
+    const medianSwing = (() => {
+      const values = [...swingByGsis.values()].sort((a, b) => a - b);
+      return values.length ? values[Math.floor(values.length / 2)] : 0.6;
+    })();
+
     // The calibrated pool: same entries, projections scaled by the
     // leave-one-out positional correction.
     const calEntries: BoardEntry[] = entries.map((e) => {
@@ -302,7 +340,7 @@ async function main() {
       };
     });
 
-    const armNames = ["adp", "greedy", "board", "boardCal", "boardWork", "boardFrag"] as const;
+    const armNames = ["adp", "greedy", "board", "boardCal", "boardWork", "boardFrag", "boardShape"] as const;
     const pools: Record<string, BoardEntry[]> = {
       adp: entries,
       greedy: entries,
@@ -310,6 +348,7 @@ async function main() {
       boardCal: calEntries,
       boardWork: workEntries,
       boardFrag: fragEntries,
+      boardShape: entries,
     };
     const arms = Object.fromEntries(armNames.map((n) => [n, [] as number[]])) as Record<
       (typeof armNames)[number],
@@ -321,7 +360,21 @@ async function main() {
     >;
     for (let seat = 1; seat <= teams; seat++) {
       for (const mode of armNames) {
-        const roster = draft(pools[mode], seat, mode === "adp" || mode === "greedy" ? mode : "board");
+        const roster = draft(
+          pools[mode],
+          seat,
+          mode === "adp" || mode === "greedy" ? mode : "board",
+          mode === "boardShape"
+            ? (e, round) => {
+                const swing = e.gsisId ? swingByGsis.get(e.gsisId) : undefined;
+                if (swing === undefined) return 1;
+                const lean = swing - medianSwing;
+                if (round <= 6) return 1 - 0.15 * lean;
+                if (round >= 10) return 1 + 0.15 * lean;
+                return 1;
+              }
+            : undefined,
+        );
         const scored = score(roster, pointsByWeek);
         arms[mode].push(scored.total);
         playoffArms[mode].push(scored.playoff);
@@ -343,13 +396,20 @@ async function main() {
     calDeltas.playoff.push(mean(playoffArms.boardCal) - mean(playoffArms.board));
     knobDeltas.work.push(mean(arms.boardWork) - mean(arms.board));
     knobDeltas.frag.push(mean(arms.boardFrag) - mean(arms.board));
+    knobDeltas.shape.push(mean(arms.boardShape) - mean(arms.board));
+    knobDeltas.shapePlayoff.push(mean(playoffArms.boardShape) - mean(playoffArms.board));
     console.log(
       `  ${season}: reasoning ${signed(reasoning)} · calibration ${signed(mean(arms.boardCal) - mean(arms.board))} · ` +
         `workhorse ${signed(mean(arms.boardWork) - mean(arms.board))} · ` +
         `fragile-fade ${signed(mean(arms.boardFrag) - mean(arms.board))}  (all on top of the board)`,
     );
 
-    function draft(pool: BoardEntry[], mySeat: number, mode: "adp" | "greedy" | "board"): BoardEntry[] {
+    function draft(
+      pool: BoardEntry[],
+      mySeat: number,
+      mode: "adp" | "greedy" | "board",
+      shape?: (e: BoardEntry, round: number) => number,
+    ): BoardEntry[] {
       const taken = new Set<number>();
       const mine: BoardEntry[] = [];
       for (let overall = 1; overall <= rounds * teams; overall++) {
@@ -373,8 +433,23 @@ async function main() {
             ?? pool.find((e) => !taken.has(e.player.id));
         } else {
           const myNext = nextMyPick(overall, mySeat);
+          const shaped = shape
+            ? pool.map((e) => {
+                const factor = shape(e, round);
+                if (factor === 1) return e;
+                const points = e.projection * factor;
+                return {
+                  ...e,
+                  player: {
+                    ...(e.player as unknown as Record<string, unknown>),
+                    seasonProjectedPoints: points,
+                    projectedPoints: points / 17,
+                  } as unknown as Player,
+                };
+              })
+            : pool;
           const board = buildDraftBoard(
-            pool.map((e) => e.player),
+            shaped.map((e) => e.player),
             settings,
             {
               pickNumber: overall,
@@ -449,6 +524,8 @@ async function main() {
   for (const [label, values] of [
     ["workhorse boost (+6% to 65%+ backs)", knobDeltas.work],
     ["fragile fade (-10% to repeat missers)", knobDeltas.frag],
+    ["floor early / ceiling late", knobDeltas.shape],
+    ["  ... in weeks 15-17 alone", knobDeltas.shapePlayoff],
   ] as const) {
     const kse = values.length > 1 ? stdev(values) / Math.sqrt(values.length) : 0;
     const ksig = kse > 0 ? Math.abs(mean(values)) / kse : 0;
