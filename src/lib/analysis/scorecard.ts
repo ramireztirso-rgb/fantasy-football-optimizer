@@ -26,11 +26,22 @@ export interface Finding {
   sample: number;
   /** One line a person can read without the code. */
   detail: string;
+  /**
+   * Named cases that show the contrast, when the caller supplied names.
+   *
+   * Chosen near each group's average rather than at its extremes. The extremes
+   * are the most persuasive examples available and the least honest ones --
+   * every group has a tail, and picking from it illustrates the tail rather
+   * than the finding.
+   */
+  examples: string[];
 }
 
 export interface Group {
   label: string;
   values: number[];
+  /** Optional labels running parallel to `values`, e.g. "Bijan Robinson 2024". */
+  names?: string[];
 }
 
 export interface JudgeOptions {
@@ -83,6 +94,7 @@ export function judge(
       detail:
         `Not enough to say: ${control.values.length} ${control.label} against ` +
         `${treatment.values.length} ${treatment.label}, and ${minGroupSize} a side is the minimum.`,
+      examples: [],
     };
   }
 
@@ -126,7 +138,16 @@ export function judge(
       `${unit} that would change a decision.`;
   }
 
-  return { claim, verdict, effect: round2(effect), effectUnit: unit, sigmas: round2(sigmas), sample, detail };
+  return {
+    claim,
+    verdict,
+    effect: round2(effect),
+    effectUnit: unit,
+    sigmas: round2(sigmas),
+    sample,
+    detail,
+    examples: [...typicalOf(control, unit), ...typicalOf(treatment, unit)],
+  };
 }
 
 /** Renders findings as a table somebody can read without the code. */
@@ -145,7 +166,10 @@ export function renderScorecard(findings: Finding[]): string {
   }
 
   lines.push("");
-  for (const f of findings) lines.push(`  ${f.claim}\n    ${f.detail}`);
+  for (const f of findings) {
+    lines.push(`  ${f.claim}\n    ${f.detail}`);
+    for (const example of f.examples) lines.push(`      ${example}`);
+  }
 
   const confirmed = findings.filter((f) => f.verdict === "CONFIRMED").length;
   const rejected = findings.filter((f) => f.verdict === "REJECTED").length;
@@ -154,6 +178,23 @@ export function renderScorecard(findings: Finding[]): string {
     `\n  ${confirmed} confirmed, ${rejected} rejected, ${unclear} inconclusive out of ${findings.length}.`,
   );
   return lines.join("\n");
+}
+
+/**
+ * Two cases from a group that sit closest to its average.
+ *
+ * The point is to put names to a number a reader would otherwise have to take
+ * on trust, without letting the names do work the statistics did not.
+ */
+function typicalOf(group: Group, unit: string, count = 2): string[] {
+  if (!group.names?.length) return [];
+  const centre = mean(group.values);
+  return group.values
+    .map((value, i) => ({ value, name: group.names?.[i] ?? "" }))
+    .filter((x) => x.name)
+    .sort((a, b) => Math.abs(a.value - centre) - Math.abs(b.value - centre))
+    .slice(0, count)
+    .map((x) => `${x.name}: ${x.value.toFixed(2)} ${unit} (typical ${group.label})`);
 }
 
 function describe(effect: number, unit: string): string {

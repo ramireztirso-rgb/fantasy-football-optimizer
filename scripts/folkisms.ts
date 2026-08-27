@@ -105,20 +105,28 @@ async function main() {
 /** "A twenty-touch back has a floor." Compared as each back's own bad weeks. */
 function workhorseFloor(playerSeasons: Game[][]): Finding {
   const heavy: number[] = [];
+  const heavyNames: string[] = [];
   const light: number[] = [];
+  const lightNames: string[] = [];
   for (const weeks of playerSeasons) {
     if (weeks[0].position !== "RB") continue;
+    const who = `${weeks[0].name} ${weeks[0].season}`;
     const touches = mean(weeks.map((w) => w.touches));
     // The floor is the tenth-percentile week, which is what "floor" means to
     // anyone using the word: not the average, the bad ones.
     const floor = percentile(weeks.map((w) => w.points), 0.1);
-    if (touches >= 20) heavy.push(floor);
-    else if (touches < 15) light.push(floor);
+    if (touches >= 20) {
+      heavy.push(floor);
+      heavyNames.push(who);
+    } else if (touches < 15) {
+      light.push(floor);
+      lightNames.push(who);
+    }
   }
   return judge(
     "20+ touch backs have a real floor",
-    { label: "sub-15-touch backs", values: light },
-    { label: "20+ touch backs", values: heavy },
+    { label: "sub-15-touch backs", values: light, names: lightNames },
+    { label: "20+ touch backs", values: heavy, names: heavyNames },
     "pts in a bad week",
     { expect: "increase", practicalThreshold: 2 },
   );
@@ -127,9 +135,12 @@ function workhorseFloor(playerSeasons: Game[][]): Finding {
 /** "Committee backfields are a trap" -- tested as week-to-week swing. */
 function committeeVariance(playerSeasons: Game[][]): Finding {
   const workhorse: number[] = [];
+  const workhorseNames: string[] = [];
   const committee: number[] = [];
+  const committeeNames: string[] = [];
   for (const weeks of playerSeasons) {
     if (weeks[0].position !== "RB") continue;
+    const who = `${weeks[0].name} ${weeks[0].season}`;
     const carries = mean(weeks.map((w) => w.carries));
     const points = weeks.map((w) => w.points);
     const average = mean(points);
@@ -138,13 +149,18 @@ function committeeVariance(playerSeasons: Game[][]): Finding {
     // raw points no matter what else is true, so comparing raw spread would
     // find that workhorses are less consistent and mean nothing by it.
     const swing = stdev(points) / average;
-    if (carries >= 15) workhorse.push(swing);
-    else if (carries > 5 && carries < 10) committee.push(swing);
+    if (carries >= 15) {
+      workhorse.push(swing);
+      workhorseNames.push(who);
+    } else if (carries > 5 && carries < 10) {
+      committee.push(swing);
+      committeeNames.push(who);
+    }
   }
   return judge(
     "Committee backs swing more week to week",
-    { label: "workhorse backs", values: workhorse },
-    { label: "committee backs", values: committee },
+    { label: "workhorse backs", values: workhorse, names: workhorseNames },
+    { label: "committee backs", values: committee, names: committeeNames },
     "swing per point scored",
     { expect: "increase", practicalThreshold: 0.1 },
   );
@@ -153,9 +169,12 @@ function committeeVariance(playerSeasons: Game[][]): Finding {
 /** "Target share beats yardage for receiver consistency." */
 function targetShareConsistency(playerSeasons: Game[][]): Finding {
   const highVolume: number[] = [];
+  const highNames: string[] = [];
   const lowVolume: number[] = [];
+  const lowNames: string[] = [];
   for (const weeks of playerSeasons) {
     if (weeks[0].position !== "WR") continue;
+    const who = `${weeks[0].name} ${weeks[0].season}`;
     const targets = mean(weeks.map((w) => w.targets));
     const points = weeks.map((w) => w.points);
     const average = mean(points);
@@ -163,13 +182,18 @@ function targetShareConsistency(playerSeasons: Game[][]): Finding {
     // Swing relative to output, so a high scorer is not penalised for having
     // more to swing with.
     const relativeSwing = stdev(points) / average;
-    if (targets >= 8) highVolume.push(relativeSwing);
-    else if (targets <= 5) lowVolume.push(relativeSwing);
+    if (targets >= 8) {
+      highVolume.push(relativeSwing);
+      highNames.push(who);
+    } else if (targets <= 5) {
+      lowVolume.push(relativeSwing);
+      lowNames.push(who);
+    }
   }
   return judge(
     "High-target receivers are steadier",
-    { label: "low-target receivers", values: lowVolume },
-    { label: "high-target receivers", values: highVolume },
+    { label: "low-target receivers", values: lowVolume, names: lowNames },
+    { label: "high-target receivers", values: highVolume, names: highNames },
     "swing per point scored",
     { expect: "decrease", practicalThreshold: 0.1 },
   );
@@ -462,6 +486,7 @@ function touchdownRegression(playerSeasons: Game[][]): Finding[] {
     effectUnit: "correlation",
     sigmas: Math.abs(r) * Math.sqrt(Math.max(1, pairs.length - 2)) / Math.sqrt(Math.max(0.0001, 1 - r * r)),
     sample: pairs.length,
+    examples: [],
     detail:
       `A player's touchdown surplus carries ${r.toFixed(2)} into the next season -- ` +
       `${(r * r * 100).toFixed(0)}% of it. ${

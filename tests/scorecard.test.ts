@@ -97,3 +97,54 @@ describe("renderScorecard", () => {
     expect(renderScorecard(findings)).toContain("1 confirmed, 1 rejected");
   });
 });
+
+describe("examples", () => {
+  const values = [1, 5, 5, 5, 9];
+  const names = ["Outlier Low", "Typical A", "Typical B", "Typical C", "Outlier High"];
+  const wide = (offset: number) =>
+    Array.from({ length: 40 }, (_, i) => offset + ((i % 5) - 2) * 0.4);
+
+  // The design decision worth guarding. Extremes are the most persuasive
+  // examples available and the least honest: every group has a tail, and
+  // quoting from it illustrates the tail rather than the finding.
+  it("names typical cases rather than the extremes", () => {
+    const f = judge(
+      "treatment scores more",
+      {
+        label: "control",
+        values: [...values, ...wide(5).slice(0, 20)],
+        names: [...names, ...Array.from({ length: 20 }, (_, i) => `Filler ${i}`)],
+      },
+      { label: "treatment", values: wide(12) },
+      "pts",
+      { expect: "increase", practicalThreshold: 2 },
+    );
+    const quoted = f.examples.join(" ");
+    expect(quoted).not.toContain("Outlier Low");
+    expect(quoted).not.toContain("Outlier High");
+    expect(quoted).toContain("pts");
+  });
+
+  it("says nothing when the caller supplied no names", () => {
+    const f = judge(
+      "treatment scores more",
+      { label: "control", values: wide(10) },
+      { label: "treatment", values: wide(16) },
+      "pts",
+      { expect: "increase", practicalThreshold: 2 },
+    );
+    expect(f.examples).toEqual([]);
+  });
+
+  it("carries no examples when nothing was concluded", () => {
+    const f = judge(
+      "treatment scores more",
+      { label: "control", values: [1, 2], names: ["A", "B"] },
+      { label: "treatment", values: [8, 9], names: ["C", "D"] },
+      "pts",
+      { expect: "increase", practicalThreshold: 1 },
+    );
+    expect(f.verdict).toBe("INCONCLUSIVE");
+    expect(f.examples).toEqual([]);
+  });
+});
