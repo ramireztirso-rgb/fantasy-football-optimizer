@@ -3,6 +3,7 @@ import type { BackfieldSource } from "@/lib/engine/backfield";
 import { backfieldShares, injuryRecord } from "@/lib/engine/backfield";
 import { normalizeTeam } from "@/lib/engine/teamChange";
 import { fetchSeasonStats, type SeasonStatLine } from "./nflverse";
+import { fetchSnapShares, type SnapShare } from "./snapCounts";
 import { fetchPlayerIdIndex } from "./playerIds";
 
 /**
@@ -37,6 +38,14 @@ export async function fetchBackfieldSource(
   }
 
   const shares = backfieldShares(latest);
+  // Snap shares ride along when available; a season without them just means
+  // the notes say less, the same contract as everything else here.
+  let snapShares = new Map<string, SnapShare>();
+  try {
+    snapShares = await fetchSnapShares(lastSeason);
+  } catch {
+    // Absent snap data degrades the notes, never the board.
+  }
   const gsisFor = (player: Player) => ids.byEspnId.get(player.id)?.gsisId;
 
   const carriesFor = (player: Player): number => {
@@ -50,7 +59,15 @@ export async function fetchBackfieldSource(
       const gsis = gsisFor(player);
       const share = gsis ? shares.get(gsis) : undefined;
       if (!share || share.role === "unknown") return undefined;
-      return { role: share.role, share: share.share, splitWith: share.splitWith };
+      const pfr = ids.byEspnId.get(player.id)?.pfrId;
+      const snaps = pfr ? snapShares.get(pfr) : undefined;
+      return {
+        role: share.role,
+        share: share.share,
+        splitWith: share.splitWith,
+        // A handful of games of snaps is a rotation accident, not a role.
+        snapShare: snaps && snaps.games >= 6 ? snaps.share : undefined,
+      };
     },
 
     durabilityFor(player) {

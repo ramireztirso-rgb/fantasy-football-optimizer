@@ -60,7 +60,7 @@ const MARKET_DISAGREEMENT_SIGMA = 2;
 export interface BackfieldSource {
   /** How a back was used last season, when that is known. */
   roleFor(player: Player):
-    | { role: string; share: number; splitWith: number }
+    | { role: string; share: number; splitWith: number; snapShare?: number }
     | undefined;
   /** How much time he tends to miss. */
   durabilityFor(player: Player): { missedPerSeason: number; fragile: boolean } | undefined;
@@ -622,17 +622,29 @@ function score(proj: Projection, ctx: ScoreContext): DraftRecommendation {
   // it would rate a handcuff at zero no matter how sound the reasoning.
   const role = ctx.state.backfield?.roleFor(player);
   if (role) {
+    // Carries and snaps disagree in an informative way, and the note says so
+    // when they do. A workhorse by carries who is on the field for barely half
+    // the snaps leaves on passing downs -- a warning in a league that pays
+    // backs per catch, and close to a free pass in this one, which does not.
+    const twoDown =
+      role.snapShare !== undefined && role.snapShare < 0.6
+        ? ` He was only on the field for ${(role.snapShare * 100).toFixed(0)}% of snaps -- off on passing downs -- which costs receiving-league backs real points and costs him almost nothing here, where backs are paid nothing per catch.`
+        : "";
     if (role.role === "workhorse") {
       b.note(
         "backfield_workhorse",
         "Owns the backfield",
-        `Took ${(role.share * 100).toFixed(0)}% of his team's carries last season. That is about as secure as a running back's workload gets, and it is the part of a projection that usually holds up.`,
+        `Took ${(role.share * 100).toFixed(0)}% of his team's carries last season. That is about as secure as a running back's workload gets, and it is the part of a projection that usually holds up.${twoDown}`,
       );
     } else if (role.role === "committee") {
+      const everDown =
+        role.snapShare !== undefined && role.snapShare >= 0.6
+          ? ` He was on the field for ${(role.snapShare * 100).toFixed(0)}% of snaps though -- the role is secure even if the carries are shared, so the floor is realer than the carry split suggests.`
+          : "";
       b.note(
         "backfield_committee",
         "Shares the backfield",
-        `Took only ${(role.share * 100).toFixed(0)}% of his team's carries last season, split ${role.splitWith} ways. The projection may be right on average and still swing hard either way, because a coaching preference decides it rather than his ability.`,
+        `Took only ${(role.share * 100).toFixed(0)}% of his team's carries last season, split ${role.splitWith} ways. The projection may be right on average and still swing hard either way, because a coaching preference decides it rather than his ability.${everDown}`,
       );
     }
   }

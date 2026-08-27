@@ -24,6 +24,8 @@ export interface PlayerIdentity {
   /** NFL's own id, the key for nflverse statistics. */
   gsisId?: string;
   sleeperId?: string;
+  /** Pro-Football-Reference id, the key for snap-count data. */
+  pfrId?: string;
   fantasyprosId?: string;
   name: string;
   position?: string;
@@ -62,6 +64,7 @@ export async function fetchPlayerIdIndex(): Promise<PlayerIdIndex> {
       espnId,
       gsisId: clean(row.gsis_id),
       sleeperId: clean(row.sleeper_id),
+      pfrId: clean(row.pfr_id),
       fantasyprosId: clean(row.fantasypros_id),
       name: row.name ?? "",
       position: clean(row.position),
