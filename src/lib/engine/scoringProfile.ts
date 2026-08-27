@@ -89,6 +89,11 @@ const BASELINE_VOLUME: Record<number, { position: Position; perGame: number }> =
   72: { position: "RB", perGame: 0.15 }, // fumbles lost
   212: { position: "RB", perGame: 3.5 },  // rushing first downs
   213: { position: "WR", perGame: 3.5 },  // receiving first downs
+  // A starting kicker makes about 1.6 field goals a game at an average of
+  // around 38 yards. Verified against ESPN's own applied totals -- see the
+  // stat-id notes in espn/stats.ts before "fixing" the -1 on made kicks.
+  214: { position: "K", perGame: 60 },    // field goal yards
+  83: { position: "K", perGame: 1.6 },    // field goals made
 };
 
 export function buildScoringProfile(
@@ -257,6 +262,18 @@ function buildImplications(
   } else if (reception === 0) {
     out.push(
       `Standard scoring, no PPR: touchdown-dependent backs and deep threats hold their value, and high-reception low-yardage players are traps.`,
+    );
+  }
+
+  // The two kicker deviations are one system and read wrongly apart: -1 per
+  // made kick looks like a penalty and +0.1 a yard looks like a windfall, when
+  // together they are distance scoring that nets to roughly standard on an
+  // average kick.
+  const perYard = deviations.find((d) => d.statId === 214);
+  const perKick = deviations.find((d) => d.statId === 83);
+  if (perYard && perKick) {
+    out.push(
+      `Kickers are paid by distance: ${formatPoints(perYard.leaguePoints)} a yard, ${formatPoints(perKick.leaguePoints)} per make. A 40-yarder nets the standard 3; a 55-yarder nets 4.5 and a chip shot 1.5. Do not read the two rules separately -- and do not draft for it, since no kicker trait (scoring, volume, or leg) meaningfully repeats year to year.`,
     );
   }
 

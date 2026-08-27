@@ -567,6 +567,22 @@ function score(proj: Projection, ctx: ScoreContext): DraftRecommendation {
     }
   }
 
+  // --- What this league's kicker scoring does and does not change ---
+  //
+  // Distance scoring looks like it should create a kicker hierarchy worth
+  // knowing: a tenth of a point per yard rewards the big leg. It does not,
+  // because no kicker trait repeats. Season scoring carries 3% of itself into
+  // the next year, makes per game 0%, and yards per made kick -- leg strength
+  // itself -- 1%. There is nothing to prefer, and the note exists to stop a
+  // manager talking themselves into paying for last year's kicker.
+  if (pos === "K") {
+    b.note(
+      "kicker_lottery",
+      "All kickers are the same bet",
+      `This league pays kickers by distance (0.1 a yard, minus one per kick), which looks like it should reward a big leg. Measured across a decade, nothing about a kicker repeats year to year -- not his scoring (3%), not his volume (0%), not even his average distance (1%). Take whichever one is left, and never earlier than the final rounds.`,
+    );
+  }
+
   // --- Where the forecast and the player's own record disagree ---
   //
   // Notes, not score, and for a sharper reason than the others: the board
