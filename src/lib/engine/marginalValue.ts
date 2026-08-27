@@ -131,13 +131,41 @@ export interface MarginalValueContext {
 }
 
 /**
+ * Games a startable player misses in a season, measured rather than guessed.
+ *
+ * Top thirty backs and receivers, top twelve quarterbacks and thirteen tight
+ * ends by points per game, 2016-2025, ranked per game precisely so that
+ * missing time does not eject a player from the sample being asked about it.
+ * These are floors: the eight-game qualifying bar hides season-ending
+ * injuries. Kickers and defences are zero by design -- their absences are
+ * streamed off the wire, never covered from the bench.
+ */
+const MISSED_GAMES: Partial<Record<Position, number>> = {
+  QB: 1.3,
+  RB: 2.0,
+  WR: 1.6,
+  TE: 2.1,
+  K: 0,
+  DST: 0,
+};
+
+/**
  * Points a bench player is worth as cover.
  *
- * Starters miss time -- injuries and a bye each season -- and somebody has to
- * play those weeks. That is real value and the lineup calculation cannot see
- * it, because it only ever looks at a healthy week. So it is added explicitly,
- * in points, and it shrinks for every backup already held: the first is cover,
- * the fourth is a roster spot.
+ * Starters miss time and somebody has to play those weeks. That is real value
+ * the lineup calculation cannot see, because it only ever looks at a healthy
+ * week. So it is added explicitly, in points.
+ *
+ * The fill weeks are per position and per starter, not a flat constant. A
+ * bench back covers two starting slots whose occupants each miss about two
+ * games plus a bye -- around six fill weeks -- where a backup quarterback
+ * covers one durable starter for nearer two. The old flat two weeks priced
+ * those identically, and the visible symptom was rosters drafted with two
+ * running backs for two starting slots: legal, and one hamstring from
+ * starting a waiver claim in the playoffs.
+ *
+ * Halves for every backup already held. The first is cover; the fourth is a
+ * roster spot.
  */
 function depthValue(
   player: Player,
@@ -147,8 +175,9 @@ function depthValue(
   const sameSlot = ctx.roster.filter((r) => r.player.position === player.position).length;
   const levels = ctx.levels[player.position] ?? 0;
   const overFree = Math.max(0, points - levels);
-  // About two weeks of a seventeen-week season, halving per backup already held.
-  const weeks = 2 / Math.pow(2, Math.max(0, sameSlot - startersAt(player.position, ctx.settings)));
+  const starters = startersAt(player.position, ctx.settings);
+  const fillWeeks = starters * ((MISSED_GAMES[player.position] ?? 1.5) + 1);
+  const weeks = fillWeeks / Math.pow(2, Math.max(0, sameSlot - starters));
   return (overFree * weeks) / 17;
 }
 
