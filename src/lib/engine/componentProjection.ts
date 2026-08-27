@@ -37,6 +37,15 @@ const REGRESSION_GAMES = 16;
 /** Games a healthy starter is assumed available for. */
 const EXPECTED_GAMES = 16;
 
+export interface AgeAdjustment {
+  /** Age the player was during each historical season, keyed by season. */
+  ageBySeason: Map<number, number>;
+  /** Age he will be in the season being projected. */
+  targetAge: number;
+  /** Expected change in points a game between two ages. */
+  between(fromAge: number, toAge: number): number;
+}
+
 export interface ComponentProjection {
   /** Season points under this league's rules, from the player's own rates. */
   points: number;
@@ -47,6 +56,11 @@ export interface ComponentProjection {
   seasons: number[];
   /** 0-1: how far the estimate was pulled toward the positional baseline. */
   regression: number;
+  /**
+   * Points a game added or removed for the player getting a year older.
+   * Zero when no age was available, which is not the same as zero effect.
+   */
+  ageAdjustment: number;
 }
 
 /**
@@ -77,6 +91,7 @@ export function componentProjection(
   settings: LeagueSettings,
   position: Position,
   baseline: number,
+  aging?: AgeAdjustment,
 ): ComponentProjection | null {
   const recent = [...history].sort((a, b) => b.season - a.season).slice(0, SEASON_WEIGHTS.length);
   if (!recent.length) return null;
@@ -91,13 +106,28 @@ export function componentProjection(
     // Weight by recency and by how much of the season the player was available
     // for: eight games is half the evidence of sixteen, whatever the rate says.
     const weight = SEASON_WEIGHTS[i] * Math.min(1, line.games / EXPECTED_GAMES);
-    weightedRate += scored.pointsPerGame * weight;
+    // Each season is carried forward to the age the player will actually be.
+    // Without this the estimate quietly assumes he stays the age he was, which
+    // is the one thing certain to be false, and the error compounds the further
+    // back the season sits.
+    const wasAged = aging?.ageBySeason.get(line.season);
+    const carried =
+      aging && wasAged !== undefined ? aging.between(wasAged, aging.targetAge) : 0;
+    weightedRate += (scored.pointsPerGame + carried) * weight;
     weightUsed += weight;
     gamesOfHistory += line.games;
   });
 
   if (weightUsed <= 0) return null;
   const ownRate = weightedRate / weightUsed;
+
+  // Reported separately so a reader can see how much of the projection is the
+  // player and how much is the calendar.
+  const unadjusted = recent.reduce((sum, line, i) => {
+    if (line.games <= 0) return sum;
+    const weight = SEASON_WEIGHTS[i] * Math.min(1, line.games / EXPECTED_GAMES);
+    return sum + scoreStatLine(line, settings, position).pointsPerGame * weight;
+  }, 0) / weightUsed;
 
   // Shrink toward the positional baseline. A player with four games of history
   // is mostly baseline; one with three full seasons is mostly himself.
@@ -110,6 +140,7 @@ export function componentProjection(
     gamesOfHistory,
     seasons: recent.map((l) => l.season),
     regression: round2(regression),
+    ageAdjustment: round2(ownRate - unadjusted),
   };
 }
 

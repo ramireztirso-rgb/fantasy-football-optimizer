@@ -22,7 +22,9 @@ loadEnvFile(".env");
 
 const { credentialsFromEnv } = await import("../src/lib/espn/client");
 const { fetchDraftPool, fetchLeague } = await import("../src/lib/espn/league");
-const { fetchPlayerIdIndex } = await import("../src/lib/sources/playerIds");
+const { fetchPlayerIdIndex, ageAtSeason } = await import("../src/lib/sources/playerIds");
+const { buildAgeCurve } = await import("../src/lib/engine/aging");
+const { scoreStatLine } = await import("../src/lib/engine/scoreFromStats");
 const { fetchSeasonStats } = await import("../src/lib/sources/nflverse");
 const { componentProjection, positionalBaselines, compareToForecast } = await import(
   "../src/lib/engine/componentProjection"
@@ -39,6 +41,8 @@ interface Row {
   own: number;
   relativeGap: number;
   games: number;
+  /** Points a game the aging curve added or removed. */
+  aged: number;
   /** Where he played last, when that is somewhere else. */
   movedFrom: string | null;
 }
@@ -97,6 +101,31 @@ async function main() {
     return;
   }
 
+  // The aging curve, fitted from the same seasons rather than assumed. Without
+  // it the disagreement below sorts almost perfectly by age, which is an aging
+  // curve showing through rather than anything anyone can act on.
+  const ageObservations: Array<{ position: never; age: number; delta: number }> = [];
+  const rateByKey = new Map<string, number>();
+  for (const [gsisId, lines] of history) {
+    for (const line of lines) {
+      if (line.games < 8) continue;
+      const scored = scoreStatLine(line, settings, line.position as never);
+      if (scored.pointsPerGame > 0) rateByKey.set(`${line.season}:${gsisId}`, scored.pointsPerGame);
+    }
+  }
+  for (const [key, rate] of rateByKey) {
+    const [seasonText, gsisId] = key.split(":");
+    const next = rateByKey.get(`${Number(seasonText) + 1}:${gsisId}`);
+    if (next === undefined) continue;
+    const identity = ids.byGsisId.get(gsisId);
+    if (!identity?.position) continue;
+    const age = ageAtSeason(identity, Number(seasonText));
+    if (age === null) continue;
+    ageObservations.push({ position: identity.position as never, age, delta: next - rate });
+  }
+  const ageCurve = buildAgeCurve(ageObservations);
+  console.log(`Aging curve fitted on ${ageObservations.length} season pairs`);
+
   const baselines = positionalBaselines(byPosition as never, settings);
   console.log(`Seasons ${seasons.join(", ")} · scored under "${settings.name}" rules`);
   console.log(
@@ -123,7 +152,24 @@ async function main() {
     }
 
     const baseline = baselines[player.position as never] as number | undefined;
-    const own = componentProjection(lines, settings, player.position, baseline ?? 0);
+
+    const ageBySeason = new Map<number, number>();
+    for (const line of lines) {
+      const was = identity ? ageAtSeason(identity, line.season) : null;
+      if (was !== null) ageBySeason.set(line.season, was);
+    }
+    const targetAge = identity ? ageAtSeason(identity, settings.seasonId) : null;
+    const aging =
+      targetAge !== null && ageBySeason.size
+        ? {
+            ageBySeason,
+            targetAge,
+            between: (from: number, to: number) =>
+              ageCurve.between(player.position as never, from, to),
+          }
+        : undefined;
+
+    const own = componentProjection(lines, settings, player.position, baseline ?? 0, aging);
     // Half the estimate coming from the positional baseline means we are
     // describing the baseline, not the player.
     if (!own || own.regression > 0.5) continue;
@@ -138,6 +184,7 @@ async function main() {
       forecast: player.seasonProjectedPoints,
       own: own.points,
       relativeGap: cmp.relativeGap,
+      aged: own.ageAdjustment,
       games: own.gamesOfHistory,
     });
   }
