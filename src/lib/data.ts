@@ -9,6 +9,7 @@ import {
 } from "@/lib/espn/league";
 import { normalizeLeague } from "@/lib/espn/normalize";
 import { buildDemoDraft, buildDemoLeague, buildDemoPlayers } from "@/lib/demo/league";
+import { mockDraftEnabled, mockDraftStatus } from "@/lib/mock/draftRoom";
 import type { DraftStatus, League, Player, Position } from "@/lib/domain/types";
 import type { HistoricalDraft, PlayerReference } from "@/lib/engine/tendencies";
 
@@ -59,6 +60,13 @@ export async function getDraftPoolData(): Promise<DataSourceResult<Player[]>> {
 export async function getDraftStatus(): Promise<DataSourceResult<DraftStatus>> {
   if (!isConfigured()) {
     return { data: buildDemoDraft(), isDemo: true };
+  }
+  // The practice room, when MOCK_DRAFT=1. It fakes exactly this one answer --
+  // what picks have been made -- and everything downstream of it runs the
+  // production path against the fitted model of this league's managers. The
+  // env gate is what guarantees it cannot exist on draft night by accident.
+  if (mockDraftEnabled()) {
+    return { data: await mockDraftStatus(), isDemo: false };
   }
   return { data: await fetchDraftStatus(credentialsFromEnv()), isDemo: false };
 }

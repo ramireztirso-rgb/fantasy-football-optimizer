@@ -10,6 +10,8 @@ import type { Reason } from "@/lib/engine/explain";
 
 interface LiveDraftResponse {
   isDemo: boolean;
+  /** True when the server is running the practice room rather than ESPN. */
+  mock?: boolean;
   settings: LeagueSettings;
   draft: {
     connected: boolean;
@@ -82,6 +84,18 @@ export default function DraftPage() {
   if (loading || !data) return <Loading what="the draft board" />;
 
   const { draft, board, settings, correction } = data;
+  const isMock = data.mock === true;
+
+  // A pick in the practice room: post it, then refetch so the board reacts the
+  // way it will on the night -- through the polling loop, not a local update.
+  const draftPlayer = async (playerId: number) => {
+    await fetch("/api/mock", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "pick", playerId }),
+    });
+    void load();
+  };
 
   // Bands reorder players by fit, so each row has to carry the board's own
   // ranking with it -- otherwise it is not visible that you are being advised
@@ -146,6 +160,34 @@ export default function DraftPage() {
           </p>
         )}
       </Card>
+
+      {isMock && (
+        <Card
+          title="Practice room"
+          subtitle="Live from the fitted model of your league's managers, not ESPN. Picks arrive on a clock; when it stops on you, hit Draft on anyone below."
+          right={
+            <button
+              type="button"
+              onClick={() => {
+                void fetch("/api/mock", {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ action: "reset" }),
+                }).then(() => void load());
+              }}
+              className="rounded-lg border border-pitch-700 px-2 py-1 text-xs text-chalk-300 hover:bg-pitch-800"
+            >
+              Restart draft
+            </button>
+          }
+        >
+          <p className="text-sm text-chalk-300">
+            {onTheClock
+              ? "You are on the clock. Pick from the board below."
+              : `Pick ${draft.currentPick} — rivals are drafting. Your turn at #${draft.myNextPick ?? "—"}.`}
+          </p>
+        </Card>
+      )}
 
       {onTheClock && board.recommendations[0] && (
         <Card title="You are on the clock">
@@ -216,6 +258,7 @@ export default function DraftPage() {
                         key={rec.player.id}
                         rec={rec}
                         rank={rankOf.get(rec.player.id) ?? 0}
+                        onDraft={isMock && onTheClock ? draftPlayer : undefined}
                       />
                     ))}
                   </ul>
@@ -230,7 +273,12 @@ export default function DraftPage() {
           ) : (
             <ul className="space-y-6">
               {board.recommendations.map((rec, i) => (
-                <RecommendationRow key={rec.player.id} rec={rec} rank={i + 1} />
+                <RecommendationRow
+                  key={rec.player.id}
+                  rec={rec}
+                  rank={i + 1}
+                  onDraft={isMock && onTheClock ? draftPlayer : undefined}
+                />
               ))}
             </ul>
           )}
@@ -359,9 +407,12 @@ export default function DraftPage() {
 function RecommendationRow({
   rec,
   rank,
+  onDraft,
 }: {
   rec: DraftBoard["recommendations"][number];
   rank: number;
+  /** Present only in the practice room, and only on your pick. */
+  onDraft?: (playerId: number) => void;
 }) {
   return (
     <li className="border-b border-pitch-800 pb-6 last:border-0 last:pb-0">
@@ -382,6 +433,15 @@ function RecommendationRow({
           {rec.survivalBasis === "league-needs" ? " (league)" : " (ADP)"}
         </Pill>
         <span className="tabular ml-auto text-lg font-semibold">{rec.score.toFixed(0)}</span>
+        {onDraft && (
+          <button
+            type="button"
+            onClick={() => onDraft(rec.player.id)}
+            className="rounded-lg border border-gain-600/40 bg-gain-600/15 px-3 py-1 text-xs font-semibold text-gain-400 hover:bg-gain-600/30"
+          >
+            Draft
+          </button>
+        )}
       </div>
       <Reasons reasons={rec.reasons} />
     </li>

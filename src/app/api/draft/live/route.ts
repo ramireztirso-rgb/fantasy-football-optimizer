@@ -5,6 +5,7 @@ import { buildDraftBoard } from "@/lib/engine/draft";
 import { fetchAdpMarket } from "@/lib/sources/adp";
 import { fetchBackfieldSource } from "@/lib/sources/backfieldSource";
 import { fetchSecondOpinion } from "@/lib/sources/secondOpinion";
+import { mockDraftEnabled } from "@/lib/mock/draftRoom";
 
 export const dynamic = "force-dynamic";
 
@@ -80,6 +81,7 @@ export async function POST(request: Request) {
     );
 
     return NextResponse.json({
+      mock: mockDraftEnabled(),
       isDemo,
       settings: league.settings,
       draft: {
