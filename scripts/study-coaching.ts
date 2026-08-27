@@ -128,6 +128,31 @@ async function main() {
  * of separating broken offences from mediocre ones is that they point opposite
  * ways.
  */
+/**
+ * Coaching changes confirmed against news reporting, 2026 cycle.
+ *
+ * The schedule file's coach assignments turned out to be stale for at least
+ * three of the ten changes this cycle -- it missed Buffalo, Arizona and
+ * Atlanta entirely. Verified 2026-08-27 against team announcements and league
+ * trackers (nfl.com, baltimoreravens.com, Yahoo's full-list piece). Where this
+ * map and the schedule file disagree, the news wins; teams absent from both
+ * are treated as keeping their coach.
+ */
+const VERIFIED_CHANGES_2026: Record<string, string> = {
+  NYG: "John Harbaugh",
+  BUF: "Joe Brady",
+  ARI: "Mike LaFleur",
+  BAL: "Jesse Minter",
+  MIA: "Jeff Hafley",
+  LV: "Klint Kubiak",
+  ATL: "Kevin Stefanski",
+  CLE: "Todd Monken",
+  TEN: "Robert Saleh",
+  // Reported (Tomlin's departure is confirmed; the hire is from the schedule
+  // file and one tracker rather than a team announcement):
+  PIT: "Mike McCarthy",
+};
+
 async function applyToUpcomingSeason(seasons: Awaited<ReturnType<typeof fetchTeamSeasons>>) {
   const league = await fetchLeague(credentialsFromEnv());
   const upcoming = league.settings.seasonId;
@@ -140,6 +165,13 @@ async function applyToUpcomingSeason(seasons: Awaited<ReturnType<typeof fetchTea
   if (!coachesNow.size) {
     console.log(`\nNo ${upcoming} coaching assignments published yet.`);
     return;
+  }
+  // The news overlay for the season it covers. Without it the schedule file's
+  // stale rows silently shrink the list of changes.
+  if (upcoming === 2026) {
+    for (const [team, coach] of Object.entries(VERIFIED_CHANGES_2026)) {
+      coachesNow.set(team, coach);
+    }
   }
 
   interface Row {
