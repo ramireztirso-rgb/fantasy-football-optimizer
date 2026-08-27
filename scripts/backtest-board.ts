@@ -41,6 +41,8 @@ const seasons = (readFlag("--seasons") ?? "2019,2020,2021,2023,2024,2025")
   .split(",")
   .map((s) => Number(s.trim()));
 const rounds = Number(readFlag("--rounds") ?? 12);
+/** Print seat one's two rosters per season, for eyeballing against reality. */
+const showRosters = args.includes("--show-rosters");
 const teams = 12;
 
 const SLOTS = ["QB", "RB", "RB", "WR", "WR", "TE", "FLEX"] as const;
@@ -167,24 +169,44 @@ async function main() {
       );
     }
 
-    const seasonDelta: number[] = [];
-    const playoffDelta: number[] = [];
+    // Three arms, because two conflated the question. The ADP drafter carries
+    // the market's knowledge -- August's news about suspensions, implosions,
+    // camp injuries -- embedded in the ADP order itself. Our projections are
+    // statistics only. So board-versus-ADP mixes the value of the board's
+    // reasoning with the cost of its narrower knowledge, and the first run of
+    // this harness mistook that mixture for a verdict. The greedy arm drafts
+    // best-projected-available with no reasoning at all: board minus greedy
+    // isolates what the reasoning is worth on identical knowledge, which is
+    // the only clean question here.
+    const arms = { adp: [] as number[], greedy: [] as number[], board: [] as number[] };
+    const playoffArms = { adp: [] as number[], greedy: [] as number[], board: [] as number[] };
     for (let seat = 1; seat <= teams; seat++) {
-      const adpRoster = draft(entries, seat, "adp");
-      const boardRoster = draft(entries, seat, "board");
-      const a = score(adpRoster, pointsByWeek);
-      const b = score(boardRoster, pointsByWeek);
-      seasonDelta.push(b.total - a.total);
-      playoffDelta.push(b.playoff - a.playoff);
+      for (const mode of ["adp", "greedy", "board"] as const) {
+        const roster = draft(entries, seat, mode);
+        const scored = score(roster, pointsByWeek);
+        arms[mode].push(scored.total);
+        playoffArms[mode].push(scored.playoff);
+        if (showRosters && seat === 1) {
+          console.log(`    ${mode}, seat 1 (${scored.total.toFixed(0)} pts):`);
+          for (const e of roster) {
+            console.log(
+              `      ${e.position.padEnd(3)} ${e.name.slice(0, 22).padEnd(22)} adp ${String(Math.round(e.adp)).padStart(3)}  proj ${String(Math.round(e.projection)).padStart(3)} (${e.basis})`,
+            );
+          }
+        }
+      }
     }
-    deltas.total.push(mean(seasonDelta));
-    deltas.playoff.push(mean(playoffDelta));
+    const reasoning = mean(arms.board) - mean(arms.greedy);
+    const knowledge = mean(arms.greedy) - mean(arms.adp);
+    deltas.total.push(reasoning);
+    deltas.playoff.push(mean(playoffArms.board) - mean(playoffArms.greedy));
     console.log(
-      `  ${season}: board vs ADP ${signed(mean(seasonDelta))} pts/season · weeks 15-17 ${signed(mean(playoffDelta))}` +
-        ` · projections: ${entries.filter((e) => e.basis === "component").length} own record, ${entries.filter((e) => e.basis === "market").length} market-implied`,
+      `  ${season}: reasoning ${signed(reasoning)} (board vs greedy) · ` +
+        `knowledge ${signed(knowledge)} (greedy vs ADP) · ` +
+        `whole tool ${signed(mean(arms.board) - mean(arms.adp))} vs market`,
     );
 
-    function draft(pool: BoardEntry[], mySeat: number, mode: "adp" | "board"): BoardEntry[] {
+    function draft(pool: BoardEntry[], mySeat: number, mode: "adp" | "greedy" | "board"): BoardEntry[] {
       const taken = new Set<number>();
       const mine: BoardEntry[] = [];
       for (let overall = 1; overall <= rounds * teams; overall++) {
@@ -194,6 +216,18 @@ async function main() {
         let choice: BoardEntry | undefined;
         if (seatNow !== mySeat || mode === "adp") {
           choice = pool.find((e) => !taken.has(e.player.id));
+        } else if (mode === "greedy") {
+          // Best projected available, blind to roster shape -- capped at the
+          // starter counts plus modest depth so it fields a legal team, since
+          // an uncapped greedy drafts eleven quarterbacks and tests nothing.
+          const held = new Map<string, number>();
+          for (const e of mine) held.set(e.position, (held.get(e.position) ?? 0) + 1);
+          const caps: Record<string, number> = { QB: 2, RB: 5, WR: 5, TE: 2 };
+          choice = [...pool]
+            .filter((e) => !taken.has(e.player.id))
+            .filter((e) => (held.get(e.position) ?? 0) < (caps[e.position] ?? 0))
+            .sort((a, b) => b.projection - a.projection)[0]
+            ?? pool.find((e) => !taken.has(e.player.id));
         } else {
           const myNext = nextMyPick(overall, mySeat);
           const board = buildDraftBoard(
@@ -260,15 +294,14 @@ async function main() {
   const se = deltas.total.length > 1 ? stdev(deltas.total) / Math.sqrt(deltas.total.length) : 0;
   const sigmas = se > 0 ? Math.abs(mean(deltas.total)) / se : 0;
   console.log(
-    `\n  Overall: the board ${mean(deltas.total) >= 0 ? "beats" : "loses to"} the ADP drafter by ` +
-      `${signed(mean(deltas.total))} ± ${se.toFixed(0)} points a season (${sigmas.toFixed(1)}x noise), ` +
-      `${signed(mean(deltas.playoff))} in weeks 15-17.`,
+    `\n  Reasoning's worth, on identical knowledge: ${signed(mean(deltas.total))} ± ${se.toFixed(0)} ` +
+      `points a season (${sigmas.toFixed(1)}x noise), ${signed(mean(deltas.playoff))} in weeks 15-17.`,
   );
   console.log(
-    `\n  Read it strictly: both drafters share the same projections and the same\n` +
-      `  market. The difference is only the board's reasoning -- lineup-marginal\n` +
-      `  value, opportunity cost, roster construction -- which is exactly the part\n` +
-      `  a tool can claim credit for.`,
+    `\n  The knowledge column is the honest cost of statistics-only projections\n` +
+      `  against a market that reads the news. It is not the board's fault and not\n` +
+      `  its credit -- on the real draft night the board carries ESPN's projections,\n` +
+      `  which know the news too.`,
   );
 }
 
