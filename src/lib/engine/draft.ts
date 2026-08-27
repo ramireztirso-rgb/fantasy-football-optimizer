@@ -71,6 +71,22 @@ export interface BackfieldSource {
   handcuffTargetFor(player: Player, myRoster: Player[]): Player | undefined;
 }
 
+/**
+ * An independent read on what a player is worth, structural like the others so
+ * the engine never learns where it came from.
+ */
+export interface SecondOpinionSource {
+  for(player: Player):
+    | {
+        relativeGap: number;
+        fromOwnProduction: number;
+        gamesOfHistory: number;
+        note: string | null;
+        movedFrom: string | null;
+      }
+    | undefined;
+}
+
 export interface DraftState {
   /** Overall pick number currently on the clock. */
   pickNumber: number;
@@ -95,6 +111,12 @@ export interface DraftState {
    * running backs; nothing depends on it.
    */
   backfield?: BackfieldSource;
+  /**
+   * The player's own recent production, aged and scored under this league's
+   * rules, as a check on the forecast. Absent, the board simply has one
+   * opinion, which is where it started.
+   */
+  secondOpinion?: SecondOpinionSource;
 }
 
 export interface DraftRecommendation {
@@ -543,6 +565,30 @@ function score(proj: Projection, ctx: ScoreContext): DraftRecommendation {
           : `ESPN has him going around pick ${player.averageDraftPosition.toFixed(0)} against ${quote.adp.toFixed(0)} in the wider market across ${quote.timesDrafted} drafts. Your leaguemates see ESPN's number, so expect him to go earlier here than he would anywhere else -- and ask what the market knows that ESPN does not.`,
       );
     }
+  }
+
+  // --- Where the forecast and the player's own record disagree ---
+  //
+  // Notes, not score, and for a sharper reason than the others: the board
+  // ranks on ESPN's projection, so scoring its disagreement with ESPN would be
+  // betting against the forecast while using the same forecast to keep score.
+  // The disagreement cannot be adjudicated here -- a gap on a young player is
+  // usually a role change the history has not seen, and often right. What can
+  // be done is to stop it being invisible on the clock.
+  const opinion = ctx.state.secondOpinion?.for(player);
+  if (opinion?.note) {
+    b.note(
+      "second_opinion",
+      opinion.relativeGap >= 0 ? "Forecast outruns his record" : "His record outruns the forecast",
+      opinion.note,
+    );
+  }
+  if (opinion?.movedFrom) {
+    b.note(
+      "changed_teams",
+      `New team (was ${opinion.movedFrom})`,
+      `${player.name} has moved from ${opinion.movedFrom}, which makes his own history the least reliable guide on this board: the targets and carries it extrapolates belonged to a different offence. Weigh the projection over the track record here.`,
+    );
   }
 
   // --- How the backfield is shared, and who inherits it ---

@@ -4,6 +4,7 @@ import { buildLiveDraftContext, courseCorrection } from "@/lib/engine/draftLive"
 import { buildDraftBoard } from "@/lib/engine/draft";
 import { fetchAdpMarket } from "@/lib/sources/adp";
 import { fetchBackfieldSource } from "@/lib/sources/backfieldSource";
+import { fetchSecondOpinion } from "@/lib/sources/secondOpinion";
 
 export const dynamic = "force-dynamic";
 
@@ -47,6 +48,13 @@ export async function POST(request: Request) {
       return undefined;
     });
 
+    // The second opinion on every projection. Same contract as the others: a
+    // failure costs the board an opinion, never a draft.
+    const secondOpinion = await fetchSecondOpinion(league.settings).catch((err) => {
+      console.warn("[second-opinion] history unavailable:", err);
+      return undefined;
+    });
+
     const board = buildDraftBoard(
       pool,
       league.settings,
@@ -58,6 +66,7 @@ export async function POST(request: Request) {
         live: ctx,
         market,
         backfield,
+        secondOpinion,
       },
       Math.min(60, body.limit ?? 25),
     );

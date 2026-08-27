@@ -3,6 +3,7 @@ import { getDraftPoolData, getLeague, toErrorResponse } from "@/lib/data";
 import { buildDraftBoard, type DraftState } from "@/lib/engine/draft";
 import { fetchAdpMarket } from "@/lib/sources/adp";
 import { fetchBackfieldSource } from "@/lib/sources/backfieldSource";
+import { fetchSecondOpinion } from "@/lib/sources/secondOpinion";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +43,13 @@ export async function POST(request: Request) {
       return undefined;
     });
 
+    // The second opinion on every projection. Same contract as the others: a
+    // failure costs the board an opinion, never a draft.
+    const secondOpinion = await fetchSecondOpinion(league.settings).catch((err) => {
+      console.warn("[second-opinion] history unavailable:", err);
+      return undefined;
+    });
+
     const byId = new Map(pool.map((p) => [p.id, p]));
     const myRoster = (body.myRosterIds ?? [])
       .map((id) => byId.get(id))
@@ -56,6 +64,7 @@ export async function POST(request: Request) {
       myRoster,
       market,
       backfield,
+      secondOpinion,
     };
 
     const board = buildDraftBoard(pool, league.settings, state, Math.min(60, body.limit ?? 30));
