@@ -221,7 +221,12 @@ returns recommendations, which is what makes it testable without a network.
 npm run dev         # dev server
 npm run build       # production build
 npm run verify      # check ESPN connection and print what parsed
-npm test            # 131 tests
+npm run readiness   # draft-morning check: every source reachable, caches warm
+npm run replay      # replay a full draft through the live path, 1117 checks
+npm run sweep       # simulate all 12 draft seats against this league's managers
+npm run folkisms    # test 20 pieces of received wisdom, with verdicts
+npm run backtest    # Zero RB vs Robust RB on six real draft boards
+npm test            # 189 tests
 npm run typecheck   # tsc --noEmit
 ```
 
