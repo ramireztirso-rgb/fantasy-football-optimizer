@@ -126,7 +126,7 @@ export interface DraftState {
 
 export interface OffenseSource {
   for(proTeam: string):
-    | { pointsPerGame: number; rank: number; teams: number }
+    | { pointsPerGame: number; rank: number; teams: number; basis: "vegas" | "last-season" }
     | undefined;
 }
 
@@ -619,10 +619,14 @@ function score(proj: Projection, ctx: ScoreContext): DraftRecommendation {
   // that assumes last year's team suddenly scores.
   const offense = ctx.state.offense?.for(player.proTeam);
   if (offense && ["QB", "RB", "WR", "TE"].includes(player.position) && offense.rank > offense.teams - 8) {
+    const reading =
+      offense.basis === "vegas"
+        ? `The betting market expects only ${offense.pointsPerGame.toFixed(1)} points a game from this offense this season -- ranked ${offense.rank} of ${offense.teams} by the lines posted so far. That is a forward-looking read: bookmakers have already priced the offseason.`
+        : `His team scored ${offense.pointsPerGame.toFixed(1)} points a game last season, ranked ${offense.rank} of ${offense.teams} -- no betting lines were available for a forward-looking read.`;
     b.note(
       "weak_offense",
       "Plays in a weak offense",
-      `His team scored ${offense.pointsPerGame.toFixed(1)} points a game last season, ranked ${offense.rank} of ${offense.teams}. A bad offense caps everyone in it -- fewer drives, fewer scoring chances -- so his projection leans on the offense improving. Check whether anything actually changed there.`,
+      `${reading} A bad offense caps everyone in it -- fewer drives, fewer scoring chances -- so his projection leans on the offense beating that expectation.`,
     );
   }
 

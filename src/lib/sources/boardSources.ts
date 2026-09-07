@@ -7,7 +7,7 @@ import { fetchSecondOpinion, type SecondOpinion } from "./secondOpinion";
 import type { BackfieldSource } from "@/lib/engine/backfield";
 import type { SecondOpinionSource } from "./secondOpinion";
 import type { OffenseSource } from "@/lib/engine/draft";
-import { fetchTeamSeasons } from "./schedules";
+import { fetchGameContext, fetchTeamSeasons, impliedTotalFor } from "./schedules";
 import { normalizeTeam } from "@/lib/engine/teamChange";
 
 /**
@@ -44,8 +44,11 @@ interface DerivedFile {
   builtAt: number;
   fitted: number;
   players: Record<string, DerivedPlayer>;
-  /** Last season's scoring per team: points a game and rank among all teams. */
-  offense?: Record<string, { pointsPerGame: number; rank: number; teams: number }>;
+  /** Each team's offense: expected points a game and rank, worst known. */
+  offense?: Record<
+    string,
+    { pointsPerGame: number; rank: number; teams: number; basis: "vegas" | "last-season" }
+  >;
 }
 
 interface Assembled {
@@ -93,17 +96,47 @@ export async function getBoardSources(
 }
 
 async function buildDerived(settings: LeagueSettings, pool: Player[]): Promise<DerivedFile> {
-  const [backfield, secondOpinion, teamSeasons] = await Promise.all([
+  const [backfield, secondOpinion, teamSeasons, gameContexts] = await Promise.all([
     fetchBackfieldSource(settings.seasonId).catch(() => undefined),
     fetchSecondOpinion(settings).catch(() => undefined),
     fetchTeamSeasons().catch(() => undefined),
+    fetchGameContext(settings.seasonId).catch(() => undefined),
   ]);
 
-  // Last season's offenses, ranked by points a game. The note this feeds is a
-  // warning about environment, so only the season just played counts -- a
-  // three-year average would forgive teams that just got bad.
+  // Each team's offense, as the betting market prices it for THIS season:
+  // the average of its implied point totals across every game with a posted
+  // line. Bookmakers have already digested the offseason -- the new
+  // quarterback, the gutted offensive line -- which is exactly what last
+  // season's scoring cannot know. Last season's points per game is only the
+  // fallback for when lines are not posted, and the note says which one it is
+  // reading from.
   let offenseTable: DerivedFile["offense"];
-  if (teamSeasons) {
+  const byTeam = new Map<string, number[]>();
+  if (gameContexts) {
+    for (const ctx of gameContexts.values()) {
+      for (const team of [ctx.home, ctx.away]) {
+        const implied = impliedTotalFor(team, ctx);
+        if (implied !== null && Number.isFinite(implied)) {
+          byTeam.set(team, [...(byTeam.get(team) ?? []), implied]);
+        }
+      }
+    }
+  }
+  const vegas = [...byTeam.entries()]
+    .filter(([, v]) => v.length >= 6)
+    .map(([team, v]) => ({ team, ppg: v.reduce((a, b) => a + b, 0) / v.length }))
+    .sort((a, b) => b.ppg - a.ppg);
+  if (vegas.length >= 24) {
+    offenseTable = {};
+    vegas.forEach((t, i) => {
+      offenseTable![t.team] = {
+        pointsPerGame: Math.round(t.ppg * 10) / 10,
+        rank: i + 1,
+        teams: vegas.length,
+        basis: "vegas",
+      };
+    });
+  } else if (teamSeasons) {
     const last = teamSeasons
       .filter((t) => t.season === settings.seasonId - 1 && t.games >= 8)
       .map((t) => ({ team: t.team, ppg: t.pointsFor / t.games }))
@@ -115,6 +148,7 @@ async function buildDerived(settings: LeagueSettings, pool: Player[]): Promise<D
           pointsPerGame: Math.round(t.ppg * 10) / 10,
           rank: i + 1,
           teams: last.length,
+          basis: "last-season",
         };
       });
     }
