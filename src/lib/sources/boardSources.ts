@@ -6,6 +6,8 @@ import { fetchBackfieldSource } from "./backfieldSource";
 import { fetchSecondOpinion, type SecondOpinion } from "./secondOpinion";
 import type { BackfieldSource } from "@/lib/engine/backfield";
 import type { SecondOpinionSource } from "./secondOpinion";
+import type { OffenseSource } from "@/lib/engine/draft";
+import { fetchTeamSeasons } from "./schedules";
 import { normalizeTeam } from "@/lib/engine/teamChange";
 
 /**
@@ -42,12 +44,15 @@ interface DerivedFile {
   builtAt: number;
   fitted: number;
   players: Record<string, DerivedPlayer>;
+  /** Last season's scoring per team: points a game and rank among all teams. */
+  offense?: Record<string, { pointsPerGame: number; rank: number; teams: number }>;
 }
 
 interface Assembled {
   market: AdpMarket | undefined;
   backfield: BackfieldSource | undefined;
   secondOpinion: SecondOpinionSource | undefined;
+  offense: OffenseSource | undefined;
 }
 
 const TTL_MS = 6 * 60 * 60 * 1000;
@@ -88,10 +93,32 @@ export async function getBoardSources(
 }
 
 async function buildDerived(settings: LeagueSettings, pool: Player[]): Promise<DerivedFile> {
-  const [backfield, secondOpinion] = await Promise.all([
+  const [backfield, secondOpinion, teamSeasons] = await Promise.all([
     fetchBackfieldSource(settings.seasonId).catch(() => undefined),
     fetchSecondOpinion(settings).catch(() => undefined),
+    fetchTeamSeasons().catch(() => undefined),
   ]);
+
+  // Last season's offenses, ranked by points a game. The note this feeds is a
+  // warning about environment, so only the season just played counts -- a
+  // three-year average would forgive teams that just got bad.
+  let offenseTable: DerivedFile["offense"];
+  if (teamSeasons) {
+    const last = teamSeasons
+      .filter((t) => t.season === settings.seasonId - 1 && t.games >= 8)
+      .map((t) => ({ team: t.team, ppg: t.pointsFor / t.games }))
+      .sort((a, b) => b.ppg - a.ppg);
+    if (last.length >= 20) {
+      offenseTable = {};
+      last.forEach((t, i) => {
+        offenseTable![t.team] = {
+          pointsPerGame: Math.round(t.ppg * 10) / 10,
+          rank: i + 1,
+          teams: last.length,
+        };
+      });
+    }
+  }
 
   const players: Record<string, DerivedPlayer> = {};
   for (const p of pool) {
@@ -112,13 +139,18 @@ async function buildDerived(settings: LeagueSettings, pool: Player[]): Promise<D
     builtAt: Date.now(),
     fitted: secondOpinion?.fitted ?? 0,
     players,
+    offense: offenseTable,
   };
 }
 
 function hydrate(
   derived: DerivedFile,
   pool: Player[],
-): { backfield: BackfieldSource; secondOpinion: SecondOpinionSource } {
+): {
+  backfield: BackfieldSource;
+  secondOpinion: SecondOpinionSource;
+  offense: OffenseSource | undefined;
+} {
   const players = derived.players;
   const get = (p: Player) => players[String(p.id)];
 
@@ -145,8 +177,18 @@ function hydrate(
     for: (p) => get(p)?.opinion,
   };
 
+  const offenseTable = derived.offense;
+  const offense: OffenseSource | undefined = offenseTable
+    ? {
+        for(proTeam) {
+          const team = normalizeTeam(proTeam);
+          return team ? offenseTable[team] : undefined;
+        },
+      }
+    : undefined;
+
   void pool;
-  return { backfield, secondOpinion };
+  return { backfield, secondOpinion, offense };
 }
 
 /** Positions the derived file knows about; exported for tests. */

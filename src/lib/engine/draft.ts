@@ -117,6 +117,17 @@ export interface DraftState {
    * opinion, which is where it started.
    */
   secondOpinion?: SecondOpinionSource;
+  /**
+   * How each team's offense scored last season. Absent, the board says
+   * nothing about offensive environments; nothing depends on it.
+   */
+  offense?: OffenseSource;
+}
+
+export interface OffenseSource {
+  for(proTeam: string):
+    | { pointsPerGame: number; rank: number; teams: number }
+    | undefined;
 }
 
 export interface DraftRecommendation {
@@ -599,6 +610,22 @@ function score(proj: Projection, ctx: ScoreContext): DraftRecommendation {
       opinion.note,
     );
   }
+  // --- The offense he plays in ---
+  //
+  // A note rather than a score for the usual reason: the projection already
+  // contains his expected volume, but a bad offense caps everyone in it --
+  // fewer drives, fewer red-zone trips, game scripts that abandon the run.
+  // The person on the clock deserves the reminder before paying a projection
+  // that assumes last year's team suddenly scores.
+  const offense = ctx.state.offense?.for(player.proTeam);
+  if (offense && ["QB", "RB", "WR", "TE"].includes(player.position) && offense.rank > offense.teams - 8) {
+    b.note(
+      "weak_offense",
+      "Plays in a weak offense",
+      `His team scored ${offense.pointsPerGame.toFixed(1)} points a game last season, ranked ${offense.rank} of ${offense.teams}. A bad offense caps everyone in it -- fewer drives, fewer scoring chances -- so his projection leans on the offense improving. Check whether anything actually changed there.`,
+    );
+  }
+
   if (opinion?.movedFrom) {
     b.note(
       "changed_teams",

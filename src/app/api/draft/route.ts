@@ -25,7 +25,7 @@ export async function POST(request: Request) {
 
     // Assembled once per process and reused for ten minutes: rebuilding these
     // per poll cost seconds, which turned every hand-tracked tap into felt lag.
-    const { market, backfield, secondOpinion } = await getBoardSources(league.settings, pool);
+    const { market, backfield, secondOpinion, offense } = await getBoardSources(league.settings, pool);
 
     const byId = new Map(pool.map((p) => [p.id, p]));
     const myRoster = (body.myRosterIds ?? [])
@@ -42,6 +42,7 @@ export async function POST(request: Request) {
       market,
       backfield,
       secondOpinion,
+      offense,
     };
 
     const board = buildDraftBoard(pool, league.settings, state, Math.min(60, body.limit ?? 30));
