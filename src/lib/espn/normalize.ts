@@ -365,7 +365,17 @@ export function normalizeDraftStatus(
     // publishes the complete pick skeleton, one placeholder per slot, with
     // `playerId: -1`. Those are scheduled picks, not made ones, so a presence
     // check on playerId would read an undrafted league as fully drafted.
-    .filter((p) => typeof p.playerId === "number" && p.playerId > 0 && p.teamId !== undefined)
+    // Defenses are legitimate picks with NEGATIVE ids (-16000 minus the pro
+    // team id), so the placeholder filter must reject exactly -1 and 0, not
+    // every negative number -- the broad version silently swallowed all
+    // twelve D/ST picks of a real draft.
+    .filter(
+      (p) =>
+        typeof p.playerId === "number" &&
+        p.playerId !== 0 &&
+        p.playerId !== -1 &&
+        p.teamId !== undefined,
+    )
     .map((p, index) => {
       const overallPick = p.overallPickNumber && p.overallPickNumber > 0 ? p.overallPickNumber : index + 1;
       const size = leagueSize || 1;
